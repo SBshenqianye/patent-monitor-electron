@@ -1,0 +1,41 @@
+{
+  "name": "patent-monitor",
+  "version": "1.0.0",
+  "description": "专利监控桌面应用 - 一键爬取与清洗可视化",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win --x64"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.patent.monitor",
+    "productName": "专利监控看板",
+    "directories": {
+      "output": "dist"
+    },
+    "extraResources": [
+      {
+        "from": "scripts/",
+        "to": "scripts/",
+        "filter": ["*.exe", "*.py"]
+      }
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": null,
+      "artifactName": "${productName}-${version}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

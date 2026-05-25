@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>专利监控看板</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- 顶部导航栏 -->
+    <header class="app-header">
+        <div class="header-left">
+            <h1>📊 专利监控看板</h1>
+            <span class="subtitle">Patent Monitoring Dashboard</span>
+        </div>
+        <div class="header-right">
+            <span class="update-time" id="updateTime">最后更新：--</span>
+        </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <main class="app-main">
+        <!-- 操作按钮区 -->
+        <section class="action-bar">
+            <button class="btn btn-primary" id="btnCrawl" onclick="handleCrawl()">
+                🚀 一键爬取
+            </button>
+            <button class="btn btn-secondary" id="btnClean" onclick="handleClean()">
+                🧹 一键清洗
+            </button>
+            <button class="btn btn-outline" id="btnRefresh" onclick="loadData()">
+                🔄 刷新数据
+            </button>
+        </section>
+
+        <!-- 状态信息区 -->
+        <section class="status-bar" id="statusBar">
+            <div class="status-item">
+                <span class="status-dot idle"></span>
+                <span id="crawlStatus">就绪</span>
+            </div>
+            <div class="status-item" id="crawlerDetails" style="display:none;">
+                <!-- 爬虫详情动态显示 -->
+            </div>
+        </section>
+
+        <!-- 图表区 -->
+        <section class="charts-grid">
+            <!-- 第一行：专利状态分布 + 专利类型分布 -->
+            <div class="chart-card">
+                <div class="chart-title">专利法律状态分布</div>
+                <div id="chartStatus" class="chart-container"></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title">专利类型分布</div>
+                <div id="chartType" class="chart-container"></div>
+            </div>
+
+            <!-- 第二行：过期时间分布 -->
+            <div class="chart-card full-width">
+                <div class="chart-title">专利过期时间分布</div>
+                <div id="chartExpiry" class="chart-container"></div>
+            </div>
+
+            <!-- 第三行：历年申请趋势 -->
+            <div class="chart-card full-width">
+                <div class="chart-title">历年专利申请趋势</div>
+                <div id="chartTrend" class="chart-container"></div>
+            </div>
+
+            <!-- 第四行：专利权人排名 -->
+            <div class="chart-card full-width">
+                <div class="chart-title">专利权人 Top 20</div>
+                <div id="chartAssignee" class="chart-container"></div>
+            </div>
+        </section>
+
+        <!-- 登录提示弹窗 -->
+        <div class="modal-overlay" id="loginModal" style="display:none;">
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <h3>🔑 需要登录</h3>
+                </div>
+                <div class="modal-body">
+                    <p id="loginMessage">该爬虫需要登录网站才能使用。</p>
+                    <p>点击下方按钮将打开浏览器窗口，请完成登录后关闭浏览器。</p>
+                    <div class="login-tips">
+                        <h4>登录提示：</h4>
+                        <ul>
+                            <li>浏览器将以可见模式打开</li>
+                            <li>请在浏览器中手动完成登录（扫码/账号密码）</li>
+                            <li>登录成功后关闭浏览器窗口即可</li>
+                            <li>登录会话将被持久化保存，下次无需重复登录</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline" onclick="closeLoginModal()">取消</button>
+                    <button class="btn btn-primary" id="btnStartLogin" onclick="startLogin()">开始登录</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
