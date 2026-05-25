@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onLoginRequired: (callback) => {
         ipcRenderer.on('login-required', (event, data) => callback(data));
     },
+    onLoginDone: (callback) => {
+        ipcRenderer.on('login-done', (event, data) => callback(data));
+    },
 
     // 移除监听
     removeAllListeners: (channel) => {

@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const EventEmitter = require('events');
 
 let mainWindow = null;
 let userDataDir = null;
@@ -11,17 +12,20 @@ let scriptsDir = null;
 // 子进程管理
 const childProcesses = new Map();
 
+// 登录等待事件（用于同一进程内 resolve Promise，替代 ipcMain.once 跨进程通信）
+const loginEvents = new EventEmitter();
+
 // ============================================================
 // 路径初始化
 // ============================================================
 function initPaths() {
     userDataDir = app.getPath('userData');
     dataDir = path.join(userDataDir, 'data');
-    // 在开发模式下，脚本在项目内的 scripts/ 目录；打包后在 extraResources/scripts/
+    // 在开发模式下，脚本在项目内的 patent_crawlers/ 目录；打包后在 extraResources/patent_crawlers/
     if (app.isPackaged) {
-        scriptsDir = path.join(process.resourcesPath, 'scripts');
+        scriptsDir = path.join(process.resourcesPath, 'patent_crawlers');
     } else {
-        scriptsDir = path.join(__dirname, 'scripts');
+        scriptsDir = path.join(__dirname, 'patent_crawlers');
     }
     fs.mkdirSync(dataDir, { recursive: true });
     console.log('[main] userDataDir:', userDataDir);
@@ -30,42 +34,36 @@ function initPaths() {
 }
 
 // ============================================================
-// 辅助：查找爬虫输出文件
+// 获取脚本完整路径（优先 exe，其次 .py）
 // ============================================================
-function findOutputFile(dir, patterns) {
-    if (!fs.existsSync(dir)) return null;
-    const files = fs.readdirSync(dir);
-    for (const pattern of patterns) {
-        const match = files.find(f => f.includes(pattern) && !f.endsWith('.log'));
-        if (match) return path.join(dir, match);
-    }
-    return null;
+function getScriptPath(scriptName) {
+    const pyPath = path.join(scriptsDir, scriptName);
+    const exePath = pyPath.replace(/\.py$/, '.exe');
+    if (fs.existsSync(exePath)) return exePath;
+    if (fs.existsSync(pyPath)) return pyPath;
+    return pyPath;
 }
 
 // ============================================================
-// 执行 Python 脚本
+// 执行 Python 脚本（使用命名参数 --data-dir 等）
 // ============================================================
 function runPythonScript(scriptPath, args = []) {
     return new Promise((resolve, reject) => {
-        // 检查 exe 版本是否存在
-        const exePath = scriptPath.replace(/\.py$/, '.exe');
-        const finalScript = fs.existsSync(exePath) ? exePath : scriptPath;
-        const isExe = finalScript.endsWith('.exe');
-
-        if (!fs.existsSync(finalScript) && !isExe) {
-            reject(new Error(`脚本不存在: ${finalScript}`));
+        if (!fs.existsSync(scriptPath)) {
+            reject(new Error(`脚本不存在: ${scriptPath}`));
             return;
         }
 
-        const cmd = isExe ? finalScript : 'python';
-        const cmdArgs = isExe ? args : [finalScript, ...args];
+        const isExe = scriptPath.endsWith('.exe');
+        const cmd = isExe ? scriptPath : 'python';
+        const cmdArgs = isExe ? args : [scriptPath, ...args];
 
         console.log(`[spawn] ${cmd} ${cmdArgs.join(' ')}`);
 
         const proc = spawn(cmd, cmdArgs, {
             stdio: ['pipe', 'pipe', 'pipe'],
             encoding: 'utf-8',
-            cwd: path.dirname(finalScript),
+            cwd: path.dirname(scriptPath),
         });
 
         let stdout = '';
@@ -97,55 +95,6 @@ function runPythonScript(scriptPath, args = []) {
 }
 
 // ============================================================
-// 登录检查与引导
-// ============================================================
-function getBrowserContextPath(name) {
-    return path.join(userDataDir, `browser-context-${name}`);
-}
-
-async function checkLogin(name, scriptPath) {
-    const contextPath = getBrowserContextPath(name);
-    const isLoggedIn = fs.existsSync(path.join(contextPath, 'Default'));
-
-    if (isLoggedIn) {
-        console.log(`[${name}] 已有登录会话，跳过登录`);
-        return { needLogin: false };
-    }
-
-    // 弹出可见浏览器让用户登录
-    return new Promise((resolve, reject) => {
-        console.log(`[${name}] 需要登录，启动浏览器...`);
-
-        const exePath = scriptPath.replace(/\.py$/, '.exe');
-        const finalScript = fs.existsSync(exePath) ? exePath : scriptPath;
-        const isExe = finalScript.endsWith('.exe');
-
-        const cmd = isExe ? finalScript : 'python';
-        const cmdArgs = isExe
-            ? ['check', contextPath, dataDir]
-            : [finalScript, 'check', contextPath, dataDir];
-
-        const proc = spawn(cmd, cmdArgs, {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            encoding: 'utf-8',
-            cwd: path.dirname(finalScript),
-        });
-
-        let output = '';
-        proc.stdout.on('data', (d) => { output += d.toString(); console.log(`[${name}] ${d}`); });
-        proc.stderr.on('data', (d) => { output += d.toString(); console.log(`[${name}] ${d}`); });
-
-        proc.on('close', (code) => {
-            // 无论退出码如何，用户可能已经登录或关闭了窗口
-            const hasSession = fs.existsSync(path.join(contextPath, 'Default'));
-            resolve({ needLogin: !hasSession, output, contextPath });
-        });
-
-        proc.on('error', reject);
-    });
-}
-
-// ============================================================
 // 通知渲染进程
 // ============================================================
 function sendToRenderer(channel, data) {
@@ -155,37 +104,33 @@ function sendToRenderer(channel, data) {
 }
 
 // ============================================================
-// 爬虫执行逻辑
+// 爬虫执行逻辑（所有爬虫均使用 --data-dir + --action 命名参数）
 // ============================================================
-async function runCrawler(name, scriptPath, requiresLogin) {
-    const contextPath = getBrowserContextPath(name);
+async function runCrawler(name, scriptName, requiresLogin) {
+    const scriptPath = getScriptPath(scriptName);
 
-    // 检查并引导登录
+    if (!fs.existsSync(scriptPath)) {
+        sendToRenderer('crawler-status', { name, status: 'error', message: `${name} 失败: 脚本不存在: ${scriptPath}` });
+        return { success: false, error: `脚本不存在: ${scriptPath}` };
+    }
+
+    // 检查并引导登录（仅对需要登录的爬虫）
     if (requiresLogin) {
-        const hasSession = fs.existsSync(path.join(contextPath, 'Default'));
-        if (!hasSession) {
-            sendToRenderer('login-required', { name, needLogin: true });
-            // 等待用户确认登录
-            // 这里通过 IPC 等待渲染进程确认
-            await new Promise((resolve) => {
-                ipcMain.once(`login-done-${name}`, () => resolve());
-            });
-        }
+        sendToRenderer('login-required', { name, needLogin: true, message: `"${name}" 需要登录，请点击「开始登录」打开浏览器完成登录` });
+        // 等待用户确认登录（使用 EventEmitter 在进程内通信，5 分钟超时）
+        await new Promise((resolve) => {
+            loginEvents.once(`login-done-${name}`, resolve);
+            setTimeout(() => {
+                loginEvents.removeAllListeners(`login-done-${name}`);
+                resolve();
+            }, 5 * 60 * 1000);
+        });
     }
 
     sendToRenderer('crawler-status', { name, status: 'running', message: `正在运行 ${name}...` });
 
     try {
-        const exePath = scriptPath.replace(/\.py$/, '.exe');
-        const finalScript = fs.existsSync(exePath) ? exePath : scriptPath;
-        const isExe = finalScript.endsWith('.exe');
-
-        const cmd = isExe ? finalScript : 'python';
-        const cmdArgs = isExe
-            ? ['crawl', contextPath, dataDir]
-            : [finalScript, 'crawl', contextPath, dataDir];
-
-        const result = await runPythonScript(scriptPath, ['crawl', contextPath, dataDir]);
+        const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'crawl']);
         sendToRenderer('crawler-status', { name, status: 'completed', message: `${name} 完成` });
         return { success: true, output: result.stdout };
     } catch (err) {
@@ -199,22 +144,26 @@ async function runCrawler(name, scriptPath, requiresLogin) {
 // ============================================================
 async function runAllCrawlers() {
     const crawlerScripts = [
-        { name: '爬虫A-专利公告', script: '01_专利过期监控爬虫_v2.py', requiresLogin: false },
-        { name: '爬虫B-CNIPA', script: '02_CNIPA专利导出.py', requiresLogin: true },
+        { name: '爬虫A-专利公告', script: '01-专利过期监控爬虫_v2.py', requiresLogin: false },
+        { name: '爬虫B-CNIPA', script: '04_CNIPA专利导出.py', requiresLogin: true },
         { name: '爬虫C-天眼查', script: '03_天眼查专利导出.py', requiresLogin: true },
     ];
 
     const promises = crawlerScripts.map(c => {
-        const scriptPath = path.join(scriptsDir, c.script);
-        return runCrawler(c.name, scriptPath, c.requiresLogin);
+        return runCrawler(c.name, c.script, c.requiresLogin);
     });
 
     const results = await Promise.allSettled(promises);
-    return results.map((r, i) => ({
+    const finalResults = results.map((r, i) => ({
         name: crawlerScripts[i].name,
         status: r.status === 'fulfilled' ? (r.value.success ? 'completed' : 'error') : 'error',
         message: r.status === 'fulfilled' ? (r.value.success ? '完成' : r.value.error) : '进程异常',
     }));
+
+    // 通知所有爬虫完成
+    sendToRenderer('crawler-status', { name: 'all', status: 'completed', message: '一键爬取完成', allDone: true });
+
+    return finalResults;
 }
 
 // ============================================================
@@ -223,8 +172,11 @@ async function runAllCrawlers() {
 async function runCleaning() {
     sendToRenderer('cleaning-status', { status: 'running', message: '正在清洗数据...' });
     try {
-        const scriptPath = path.join(scriptsDir, '04_数据清洗融合.py');
-        const result = await runPythonScript(scriptPath, [dataDir]);
+        const scriptPath = getScriptPath('01_数据清洗融合.py');
+        if (!fs.existsSync(scriptPath)) {
+            throw new Error(`脚本不存在: ${scriptPath}`);
+        }
+        const result = await runPythonScript(scriptPath, ['--data-dir', dataDir]);
         sendToRenderer('cleaning-status', { status: 'completed', message: '数据清洗完成' });
         return { success: true };
     } catch (err) {
@@ -234,16 +186,47 @@ async function runCleaning() {
 }
 
 // ============================================================
-// 读取最终 JSON
+// 读取最终 JSON（兼容纯数组格式）
 // ============================================================
 function readCleanedJson() {
     const jsonPath = path.join(dataDir, 'cleaned_data.json');
     if (!fs.existsSync(jsonPath)) return null;
     try {
-        return JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+        const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+        // 如果输出是纯数组，包装成 { patents: [...] } 以兼容渲染层
+        if (Array.isArray(raw)) {
+            return { patents: raw };
+        }
+        return raw;
     } catch {
         return null;
     }
+}
+
+// ============================================================
+// 生成示例数据（用于首次打开时展示）
+// ============================================================
+function generateSampleData() {
+    return {
+        patents: [],
+        stats: {
+            total_patents: 0,
+            expired: 0,
+            expiring_soon: 0,
+            valid: 0,
+            crawler_a_count: 0,
+            crawler_b_count: 0,
+            crawler_c_count: 0,
+        },
+        summary: {
+            sourceA: '暂无数据',
+            sourceB: '暂无数据',
+            sourceC: '暂无数据',
+        },
+        timeline: [],
+        pie_data: [],
+        companies: []
+    };
 }
 
 // ============================================================
@@ -279,7 +262,10 @@ function setupIPC() {
     // 读取清洁后的 JSON 数据
     ipcMain.handle('get-data', () => {
         const data = readCleanedJson();
-        return data ? { success: true, data } : { success: false, error: '暂无数据，请先运行数据清洗' };
+        if (data) {
+            return { success: true, data };
+        }
+        return { success: true, data: generateSampleData() };
     });
 
     // 一键爬取
@@ -293,52 +279,33 @@ function setupIPC() {
         return await runCleaning();
     });
 
-    // 检查登录状态
-    ipcMain.handle('check-login', async (event, name) => {
-        const contextPath = getBrowserContextPath(name);
-        const hasSession = fs.existsSync(path.join(contextPath, 'Default'));
-        return { needLogin: !hasSession };
-    });
-
-    // 引导登录
+    // 引导登录（打开浏览器让用户登录）
     ipcMain.handle('guide-login', async (event, name) => {
         const scriptMap = {
-            '爬虫B-CNIPA': '02_CNIPA专利导出.py',
+            '爬虫B-CNIPA': '04_CNIPA专利导出.py',
             '爬虫C-天眼查': '03_天眼查专利导出.py',
         };
         const scriptName = scriptMap[name];
         if (!scriptName) return { success: false, error: '未知爬虫' };
 
-        const scriptPath = path.join(scriptsDir, scriptName);
-        const contextPath = getBrowserContextPath(name);
+        const scriptPath = getScriptPath(scriptName);
+        if (!fs.existsSync(scriptPath)) {
+            return { success: false, error: `脚本不存在: ${scriptPath}` };
+        }
 
         try {
-            const exePath = scriptPath.replace(/\.py$/, '.exe');
-            const finalScript = fs.existsSync(exePath) ? exePath : scriptPath;
-            const isExe = finalScript.endsWith('.exe');
-
-            const cmd = isExe ? finalScript : 'python';
-            const cmdArgs = isExe ? ['login', contextPath, dataDir] : [finalScript, 'login', contextPath, dataDir];
-
-            const proc = spawn(cmd, cmdArgs, {
-                stdio: ['pipe', 'pipe', 'pipe'],
-                encoding: 'utf-8',
-                cwd: path.dirname(finalScript),
-            });
-
-            proc.stdout.on('data', (d) => console.log(`[login-${name}] ${d}`));
-            proc.stderr.on('data', (d) => console.log(`[login-${name}] ${d}`));
-
-            await new Promise((resolve, reject) => {
-                proc.on('close', (code) => {
-                    if (code === 0) resolve();
-                    else reject(new Error(`登录进程退出码 ${code}`));
-                });
-                proc.on('error', reject);
-            });
-
+            // 以 --action login 模式启动脚本（可见浏览器）
+            const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'login']);
+            // 触发登录完成事件（通知等待中的 runCrawler）
+            loginEvents.emit(`login-done-${name}`);
+            // 同时通知渲染进程登录已完成
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('login-done', { name });
+            }
             return { success: true };
         } catch (err) {
+            // 即使登录失败也要放行，否则 runCrawler 会永远等待
+            loginEvents.emit(`login-done-${name}`);
             return { success: false, error: err.message };
         }
     });

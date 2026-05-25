@@ -22,9 +22,9 @@
     },
     "extraResources": [
       {
-        "from": "scripts/",
-        "to": "scripts/",
-        "filter": ["*.exe", "*.py"]
+        "from": "extraResources",
+        "to": "extraResources",
+        "filter": ["*.exe"]
       }
     ],
     "win": {
