@@ -7,7 +7,7 @@ let currentTab = 'table';
 let pendingLoginName = null;
 
 // 用于跟踪当前进行中的任务消息，以便完成后删除
-let currentCrawlMsg = null;              // “开始一键爬取任务”消息（短暂显示，无需手动删）
+let currentCrawlMsg = null;              // “开始一键爬取任务”消息（短暂显示）
 let currentCleaningRunningMsg = null;    // “正在清洗数据...”消息（需要手动删除）
 let currentRefreshMsg = null;
 
@@ -51,6 +51,9 @@ function addMessage(text, type = 'info', duration = 5000) {
         msgDiv._autoTimer = timer;
     }
     
+    // 每次添加消息后更新顶部状态栏
+    updateTopStatusFromMessages();
+    
     return msgDiv;
 }
 
@@ -63,6 +66,8 @@ function removeMessage(msgDiv) {
     msgDiv.style.opacity = '0';
     setTimeout(() => {
         if (msgDiv.parentNode) msgDiv.remove();
+        // 移除后更新顶部状态栏
+        updateTopStatusFromMessages();
     }, 300);
 }
 
@@ -78,6 +83,8 @@ function clearAllMessages() {
     currentRefreshMsg = null;
     currentCrawlMsg = null;
     currentCleaningRunningMsg = null;
+    // 更新顶部状态栏
+    updateTopStatusFromMessages();
 }
 
 function escapeHtml(str) {
@@ -88,6 +95,69 @@ function escapeHtml(str) {
         if (m === '>') return '&gt;';
         return m;
     });
+}
+
+// ======================== 顶部状态栏（根据消息列表动态更新） ========================
+function updateTopStatusFromMessages() {
+    const container = document.getElementById('messageList');
+    const statusEl = document.getElementById('crawlStatus');
+    const dotEl = document.getElementById('statusDot');
+    if (!container || !statusEl || !dotEl) return;
+
+    const messages = Array.from(container.children);
+    
+    // 优先级：error > warning > running-info > 其他info
+    let selectedMsg = null;
+    let selectedType = null;
+    
+    // 倒序遍历（最新的在前，但我们取最新的一条符合优先级的即可）
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        const type = msg.classList.contains('error') ? 'error' :
+                     msg.classList.contains('warning') ? 'warning' :
+                     msg.classList.contains('info') ? 'info' : 'success';
+        const text = msg.querySelector('.message-text')?.innerText || '';
+        
+        if (type === 'error') {
+            selectedMsg = text;
+            selectedType = 'error';
+            break;
+        }
+        if (type === 'warning' && !selectedMsg) {
+            selectedMsg = text;
+            selectedType = 'warning';
+            // 继续看有没有 error，所以不 break
+        }
+        if (type === 'info' && !selectedMsg) {
+            // 如果是“正在运行”类的信息，优先于普通 info
+            if (text.includes('正在运行') || text.includes('正在启动') || text.includes('正在清洗') || text.includes('正在刷新')) {
+                selectedMsg = text;
+                selectedType = 'info';
+                // 不再继续，因为 running 比普通 info 优先级高，但低于 error/warning
+                // 这里不能 break，因为后面可能还有 warning/error，但我们是倒序，所以如果前面已经有 running，后面不会有更高优先级（因为后面是更旧的消息），可以直接 break？
+                // 为了简单，我们找到 running 后不 break，但继续循环看是否有 error/warning，但循环是倒序，后面更旧的消息不可能有更高优先级，所以可以 break
+                // 但为了逻辑清晰，我们直接 break（因为倒序保证了最新消息优先）
+                break;
+            }
+        }
+    }
+    
+    if (selectedMsg) {
+        statusEl.textContent = selectedMsg;
+        switch (selectedType) {
+            case 'error':
+                dotEl.className = 'status-dot error';
+                break;
+            case 'warning':
+                dotEl.className = 'status-dot warning';
+                break;
+            default:
+                dotEl.className = 'status-dot running';
+        }
+    } else {
+        statusEl.textContent = '就绪';
+        dotEl.className = 'status-dot idle';
+    }
 }
 
 // ======================== 工具函数 ========================
@@ -126,17 +196,11 @@ function badgeHtml(d) {
 
 // ======================== 数据加载 ========================
 async function loadData() {
-  const statusEl = document.getElementById('crawlStatus');
-  const dotEl = document.getElementById('statusDot');
   const btnRefresh = document.getElementById('btnRefresh');
-  
   const originalBtnText = btnRefresh.textContent;
   btnRefresh.textContent = '🔄 刷新中...';
   btnRefresh.disabled = true;
 
-  dotEl.className = 'status-dot running';
-  statusEl.textContent = '正在刷新数据...';
-  
   if (currentRefreshMsg) removeMessage(currentRefreshMsg);
   currentRefreshMsg = addMessage('正在刷新数据...', 'info', 0);
 
@@ -160,9 +224,6 @@ async function loadData() {
       if (currentRefreshMsg) removeMessage(currentRefreshMsg);
       currentRefreshMsg = null;
       addMessage(`数据刷新成功，共 ${DATA.length} 条专利`, 'success');
-      
-      dotEl.className = 'status-dot success';
-      statusEl.textContent = '就绪';
     } else {
       throw new Error('返回数据格式错误');
     }
@@ -170,20 +231,10 @@ async function loadData() {
     console.error('加载数据异常:', err);
     if (currentRefreshMsg) removeMessage(currentRefreshMsg);
     currentRefreshMsg = null;
-    addMessage(`刷新失败: ${err.message}`, 'error', 0);   // 错误消息不自动消失
-    dotEl.className = 'status-dot error';
-    statusEl.textContent = '刷新失败';
+    addMessage(`刷新失败: ${err.message}`, 'error', 0);
   } finally {
     btnRefresh.textContent = originalBtnText;
     btnRefresh.disabled = false;
-    setTimeout(() => {
-      if (dotEl.className !== 'status-dot running') {
-        dotEl.className = 'status-dot idle';
-        if (statusEl.textContent !== '正在爬取...' && statusEl.textContent !== '正在清洗数据...') {
-          statusEl.textContent = '就绪';
-        }
-      }
-    }, 3000);
   }
 }
 
@@ -493,10 +544,6 @@ function handleCrawl() {
   const btn = document.getElementById('btnCrawl');
   btn.disabled = true;
   btn.textContent = '⏳ 爬取中...';
-  const statusEl = document.getElementById('crawlStatus');
-  const dotEl = document.getElementById('statusDot');
-  statusEl.textContent = '正在启动爬虫...';
-  dotEl.className = 'status-dot running';
   
   if (currentCrawlMsg) removeMessage(currentCrawlMsg);
   currentCrawlMsg = addMessage('开始一键爬取任务', 'info', 2000);
@@ -505,8 +552,6 @@ function handleCrawl() {
     if (currentCrawlMsg) removeMessage(currentCrawlMsg);
     currentCrawlMsg = null;
     addMessage(`爬取失败: ${err.message}`, 'error', 0);
-    statusEl.textContent = '爬取启动失败';
-    dotEl.className = 'status-dot error';
     btn.disabled = false;
     btn.textContent = '🚀 一键爬取';
   });
@@ -516,10 +561,6 @@ function handleClean() {
   const btn = document.getElementById('btnClean');
   btn.disabled = true;
   btn.textContent = '⏳ 清洗中...';
-  const statusEl = document.getElementById('crawlStatus');
-  const dotEl = document.getElementById('statusDot');
-  statusEl.textContent = '正在启动清洗...';
-  dotEl.className = 'status-dot running';
   
   addMessage('开始一键清洗任务', 'info', 1000);
   
@@ -531,8 +572,6 @@ function handleClean() {
       currentCleaningRunningMsg = null;
     }
     addMessage(`清洗失败: ${err.message}`, 'error', 0);
-    statusEl.textContent = '清洗启动失败';
-    dotEl.className = 'status-dot error';
     btn.disabled = false;
     btn.textContent = '🧹 一键清洗';
   });
@@ -564,48 +603,29 @@ function startLogin() {
 function setupEventListeners() {
   window.electronAPI.onCrawlerStatus((status) => {
     console.log('爬虫状态:', status);
-    const statusEl = document.getElementById('crawlStatus');
-    const dotEl = document.getElementById('statusDot');
     
     if (status.name !== 'all') {
       if (status.status === 'running') {
-        dotEl.className = 'status-dot running';
-        statusEl.textContent = status.message;
         addMessage(status.message, 'info', 0);
       } else if (status.status === 'completed') {
-        statusEl.textContent = status.message;
         addMessage(`${status.name} 完成`, 'success');
       } else if (status.status === 'error') {
-        dotEl.className = 'status-dot error';
-        statusEl.textContent = status.message;
         addMessage(`${status.name} 失败: ${status.message}`, 'error', 0);
       }
     }
     
     if (status.name === 'all' && status.allDone) {
-      addMessage(`✅ 一键爬取完成`, 'success');
-      dotEl.className = 'status-dot success';
-      statusEl.textContent = '就绪';
+      addMessage(`一键爬取完成`, 'success');
       loadData();
       document.getElementById('btnCrawl').disabled = false;
       document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
-      setTimeout(() => {
-        if (dotEl.className === 'status-dot success') {
-          dotEl.className = 'status-dot idle';
-          statusEl.textContent = '就绪';
-        }
-      }, 3000);
     }
   });
 
   window.electronAPI.onCleaningStatus((status) => {
     console.log('清洗状态:', status);
-    const statusEl = document.getElementById('crawlStatus');
-    const dotEl = document.getElementById('statusDot');
     
     if (status.status === 'running') {
-      dotEl.className = 'status-dot running';
-      statusEl.textContent = status.message;
       if (currentCleaningRunningMsg) {
         removeMessage(currentCleaningRunningMsg);
       }
@@ -617,17 +637,9 @@ function setupEventListeners() {
         currentCleaningRunningMsg = null;
       }
       addMessage('数据清洗完成', 'success');
-      dotEl.className = 'status-dot success';
-      statusEl.textContent = status.message;
       loadData();
       document.getElementById('btnClean').disabled = false;
       document.getElementById('btnClean').textContent = '🧹 一键清洗';
-      setTimeout(() => {
-        if (dotEl.className === 'status-dot success') {
-          dotEl.className = 'status-dot idle';
-          statusEl.textContent = '就绪';
-        }
-      }, 3000);
     } 
     else if (status.status === 'error') {
       if (currentCleaningRunningMsg) {
@@ -635,8 +647,6 @@ function setupEventListeners() {
         currentCleaningRunningMsg = null;
       }
       addMessage(`清洗失败: ${status.message}`, 'error', 0);
-      dotEl.className = 'status-dot error';
-      statusEl.textContent = status.message;
       document.getElementById('btnClean').disabled = false;
       document.getElementById('btnClean').textContent = '🧹 一键清洗';
     }
