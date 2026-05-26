@@ -6,8 +6,92 @@ let currentFilter = '';
 let currentTab = 'table';
 let pendingLoginName = null;
 
+// 用于跟踪当前进行中的任务消息，以便完成后删除
+let currentCrawlMsg = null;           // “开始一键爬取任务”消息（短暂显示，无需手动删）
+let currentCleaningRunningMsg = null; // “正在清洗数据...”消息（需要手动删除）
+let currentRefreshMsg = null;
+
+// ======================== 消息列表管理 ========================
+function addMessage(text, type = 'info', duration = 5000) {
+    const container = document.getElementById('messageList');
+    if (!container) return null;
+
+    const msgDiv = document.createElement('div');
+    msgDiv.className = `message-item ${type}`;
+    
+    const iconMap = {
+        info: 'ℹ️',
+        success: '✅',
+        warning: '⚠️',
+        error: '❌'
+    };
+    const icon = iconMap[type] || '📢';
+    const timeStr = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    
+    msgDiv.innerHTML = `
+        <div class="message-icon">${icon}</div>
+        <div class="message-text">${escapeHtml(text)}</div>
+        <div class="message-time">${timeStr}</div>
+        <button class="message-close" title="关闭">✖</button>
+    `;
+    
+    const closeBtn = msgDiv.querySelector('.message-close');
+    closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeMessage(msgDiv);
+    });
+    
+    container.appendChild(msgDiv);
+    container.scrollTop = container.scrollHeight;
+    
+    if (duration > 0) {
+        const timer = setTimeout(() => {
+            removeMessage(msgDiv);
+        }, duration);
+        msgDiv._autoTimer = timer;
+    }
+    
+    return msgDiv;
+}
+
+function removeMessage(msgDiv) {
+    if (!msgDiv || !msgDiv.parentNode) return;
+    if (msgDiv._autoTimer) {
+        clearTimeout(msgDiv._autoTimer);
+        msgDiv._autoTimer = null;
+    }
+    msgDiv.style.opacity = '0';
+    setTimeout(() => {
+        if (msgDiv.parentNode) msgDiv.remove();
+    }, 300);
+}
+
+function clearAllMessages() {
+    const container = document.getElementById('messageList');
+    if (!container) return;
+    const messages = Array.from(container.children);
+    messages.forEach(msg => {
+        if (msg._autoTimer) clearTimeout(msg._autoTimer);
+    });
+    container.innerHTML = '';
+    // 清空全局引用
+    currentRefreshMsg = null;
+    currentCrawlMsg = null;
+    currentCleaningRunningMsg = null;
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/[&<>]/g, function(m) {
+        if (m === '&') return '&amp;';
+        if (m === '<') return '&lt;';
+        if (m === '>') return '&gt;';
+        return m;
+    });
+}
+
 // ======================== 工具函数 ========================
-function esc(s) { return String(s || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"'); }
+function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
 function statusCode(d) {
   if (d === null || d === undefined) return 'unknown';
@@ -46,19 +130,20 @@ async function loadData() {
   const dotEl = document.getElementById('statusDot');
   const btnRefresh = document.getElementById('btnRefresh');
   
-  // 保存按钮原始文本并禁用按钮（防止重复点击）
   const originalBtnText = btnRefresh.textContent;
+  btnRefresh.textContent = '🔄 刷新中...';
   btnRefresh.disabled = true;
 
-  // 更新状态栏
   dotEl.className = 'status-dot running';
   statusEl.textContent = '正在刷新数据...';
+  
+  if (currentRefreshMsg) removeMessage(currentRefreshMsg);
+  currentRefreshMsg = addMessage('正在刷新数据...', 'info', 0);
 
   try {
     const result = await window.electronAPI.getData();
     if (result.success) {
       const data = result.data;
-      // 兼容数据结构：可能直接是数组，也可能包含 patents 字段
       if (Array.isArray(data)) {
         DATA = data;
       } else if (data && Array.isArray(data.patents)) {
@@ -72,32 +157,33 @@ async function loadData() {
       renderAll();
       updateMatchInfo();
 
-      // 显示成功信息，3秒后恢复为“就绪”
+      if (currentRefreshMsg) removeMessage(currentRefreshMsg);
+      currentRefreshMsg = null;
+      addMessage(`数据刷新成功，共 ${DATA.length} 条专利`, 'success');
+      
       dotEl.className = 'status-dot success';
-      statusEl.textContent = `✅ 数据刷新成功，共 ${DATA.length} 条专利`;
-      setTimeout(() => {
-        if (dotEl.className === 'status-dot success') {
-          dotEl.className = 'status-dot idle';
-          statusEl.textContent = '就绪';
-        }
-      }, 3000);
+      statusEl.textContent = '就绪';
     } else {
       throw new Error('返回数据格式错误');
     }
   } catch (err) {
     console.error('加载数据异常:', err);
+    if (currentRefreshMsg) removeMessage(currentRefreshMsg);
+    currentRefreshMsg = null;
+    addMessage(`刷新失败: ${err.message}`, 'error');
     dotEl.className = 'status-dot error';
-    statusEl.textContent = `❌ 刷新失败: ${err.message || '未知错误'}`;
-    setTimeout(() => {
-      if (dotEl.className === 'status-dot error') {
-        dotEl.className = 'status-dot idle';
-        statusEl.textContent = '就绪';
-      }
-    }, 4000);
+    statusEl.textContent = '刷新失败';
   } finally {
-    // 恢复刷新按钮
     btnRefresh.textContent = originalBtnText;
     btnRefresh.disabled = false;
+    setTimeout(() => {
+      if (dotEl.className !== 'status-dot running') {
+        dotEl.className = 'status-dot idle';
+        if (statusEl.textContent !== '正在爬取...' && statusEl.textContent !== '正在清洗数据...') {
+          statusEl.textContent = '就绪';
+        }
+      }
+    }, 3000);
   }
 }
 
@@ -135,7 +221,6 @@ function renderStats() {
     div.innerHTML = `<div class="num" style="color:${colors[k]}">${m[k]}</div><div class="lbl">${labels[k]}</div>`;
     el.appendChild(div);
   });
-  // 总数卡片
   const totalDiv = document.createElement('div');
   totalDiv.className = 'stat-card';
   totalDiv.innerHTML = `<div class="num" style="color:#333">${DATA.length}</div><div class="lbl">总计</div>`;
@@ -408,12 +493,21 @@ function handleCrawl() {
   const btn = document.getElementById('btnCrawl');
   btn.disabled = true;
   btn.textContent = '⏳ 爬取中...';
-  document.getElementById('crawlStatus').textContent = '正在启动爬虫...';
-  document.getElementById('statusDot').className = 'status-dot running';
+  const statusEl = document.getElementById('crawlStatus');
+  const dotEl = document.getElementById('statusDot');
+  statusEl.textContent = '正在启动爬虫...';
+  dotEl.className = 'status-dot running';
+  
+  // 开始消息只显示2秒后自动消失
+  if (currentCrawlMsg) removeMessage(currentCrawlMsg);
+  currentCrawlMsg = addMessage('开始一键爬取任务', 'info', 2000);
+  
   window.electronAPI.runAllCrawlers().catch(err => {
-    console.error('爬取失败:', err);
-    document.getElementById('crawlStatus').textContent = '❌ 爬取启动失败';
-    document.getElementById('statusDot').className = 'status-dot error';
+    if (currentCrawlMsg) removeMessage(currentCrawlMsg);
+    currentCrawlMsg = null;
+    addMessage(`爬取失败: ${err.message}`, 'error');
+    statusEl.textContent = '爬取启动失败';
+    dotEl.className = 'status-dot error';
     btn.disabled = false;
     btn.textContent = '🚀 一键爬取';
   });
@@ -423,15 +517,25 @@ function handleClean() {
   const btn = document.getElementById('btnClean');
   btn.disabled = true;
   btn.textContent = '⏳ 清洗中...';
-  document.getElementById('crawlStatus').textContent = '正在启动清洗...';
-  document.getElementById('statusDot').className = 'status-dot running';
+  const statusEl = document.getElementById('crawlStatus');
+  const dotEl = document.getElementById('statusDot');
+  statusEl.textContent = '正在启动清洗...';
+  dotEl.className = 'status-dot running';
+  
+  // 开始消息只显示1秒后自动消失
+  addMessage('开始一键清洗任务', 'info', 1000);
+  
   window.electronAPI.runCleaning().then(() => {
-    loadData();
+    // 清洗成功会在 onCleaningStatus 的 completed 里处理
   }).catch(err => {
-    console.error('清洗失败:', err);
-    document.getElementById('crawlStatus').textContent = '❌ 清洗启动失败';
-    document.getElementById('statusDot').className = 'status-dot error';
-  }).finally(() => {
+    // 如果清洗启动失败，删除可能存在的运行中消息
+    if (currentCleaningRunningMsg) {
+      removeMessage(currentCleaningRunningMsg);
+      currentCleaningRunningMsg = null;
+    }
+    addMessage(`清洗失败: ${err.message}`, 'error');
+    statusEl.textContent = '清洗启动失败';
+    dotEl.className = 'status-dot error';
     btn.disabled = false;
     btn.textContent = '🧹 一键清洗';
   });
@@ -458,57 +562,83 @@ function startLogin() {
 
 // ======================== 事件监听（来自主进程） ========================
 function setupEventListeners() {
-  // 爬虫状态更新
   window.electronAPI.onCrawlerStatus((status) => {
     console.log('爬虫状态:', status);
     const statusEl = document.getElementById('crawlStatus');
     const dotEl = document.getElementById('statusDot');
+    
+    if (status.name !== 'all') {
+      if (status.status === 'running') {
+        dotEl.className = 'status-dot running';
+        statusEl.textContent = status.message;
+        addMessage(status.message, 'info', 0);
+      } else if (status.status === 'completed') {
+        statusEl.textContent = status.message;
+        addMessage(`${status.name} 完成`, 'success');
+      } else if (status.status === 'error') {
+        dotEl.className = 'status-dot error';
+        statusEl.textContent = status.message;
+        addMessage(`${status.name} 失败: ${status.message}`, 'error');
+      }
+    }
+    
     if (status.name === 'all' && status.allDone) {
+      // 爬虫开始消息已经自动消失，无需删除
+      addMessage(`✅ 一键爬取完成`, 'success');
       dotEl.className = 'status-dot success';
-      statusEl.textContent = '✅ 爬取完成，正在刷新数据...';
+      statusEl.textContent = '就绪';
       loadData();
+      document.getElementById('btnCrawl').disabled = false;
+      document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
       setTimeout(() => {
         if (dotEl.className === 'status-dot success') {
           dotEl.className = 'status-dot idle';
           statusEl.textContent = '就绪';
         }
-      }, 5000);
-    } else if (status.status === 'running') {
-      dotEl.className = 'status-dot running';
-      statusEl.textContent = status.message;
-    } else if (status.status === 'completed') {
-      statusEl.textContent = status.message;
-    } else if (status.status === 'error') {
-      dotEl.className = 'status-dot error';
-      statusEl.textContent = status.message;
-    }
-    if (status.name === 'all' && status.allDone) {
-      document.getElementById('btnCrawl').disabled = false;
-      document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
+      }, 3000);
     }
   });
 
-  // 清洗状态更新
   window.electronAPI.onCleaningStatus((status) => {
     console.log('清洗状态:', status);
     const statusEl = document.getElementById('crawlStatus');
     const dotEl = document.getElementById('statusDot');
+    
     if (status.status === 'running') {
       dotEl.className = 'status-dot running';
       statusEl.textContent = status.message;
-    } else if (status.status === 'completed') {
+      // 如果已经有正在运行的消息，先删除旧的（避免重复）
+      if (currentCleaningRunningMsg) {
+        removeMessage(currentCleaningRunningMsg);
+      }
+      currentCleaningRunningMsg = addMessage('正在清洗数据...', 'info', 0);
+    } 
+    else if (status.status === 'completed') {
+      // 删除“正在清洗数据...”消息
+      if (currentCleaningRunningMsg) {
+        removeMessage(currentCleaningRunningMsg);
+        currentCleaningRunningMsg = null;
+      }
+      addMessage('数据清洗完成', 'success');
       dotEl.className = 'status-dot success';
       statusEl.textContent = status.message;
       loadData();
+      document.getElementById('btnClean').disabled = false;
+      document.getElementById('btnClean').textContent = '🧹 一键清洗';
       setTimeout(() => {
         if (dotEl.className === 'status-dot success') {
           dotEl.className = 'status-dot idle';
           statusEl.textContent = '就绪';
         }
-      }, 5000);
-      document.getElementById('btnClean').disabled = false;
-      document.getElementById('btnClean').textContent = '🧹 一键清洗';
-    } else if (status.status === 'error') {
+      }, 3000);
+    } 
+    else if (status.status === 'error') {
+      // 删除“正在清洗数据...”消息
+      if (currentCleaningRunningMsg) {
+        removeMessage(currentCleaningRunningMsg);
+        currentCleaningRunningMsg = null;
+      }
+      addMessage(`清洗失败: ${status.message}`, 'error');
       dotEl.className = 'status-dot error';
       statusEl.textContent = status.message;
       document.getElementById('btnClean').disabled = false;
@@ -516,21 +646,28 @@ function setupEventListeners() {
     }
   });
 
-  // 需要登录事件
   window.electronAPI.onLoginRequired((data) => {
     console.log('需要登录:', data);
+    addMessage(`爬虫“${data.name}”需要登录，请手动完成登录`, 'warning');
     showLoginModal(data.name);
   });
 
-  // 登录完成事件
   window.electronAPI.onLoginDone((data) => {
     console.log('登录完成:', data);
+    addMessage(`“${data.name}”登录已完成，可以继续爬取`, 'success');
     loadData();
   });
 }
 
 // ======================== 页面初始化 ========================
 document.addEventListener('DOMContentLoaded', () => {
+  const clearAllBtn = document.getElementById('clearAllMessagesBtn');
+  if (clearAllBtn) {
+    clearAllBtn.addEventListener('click', () => {
+      clearAllMessages();
+    });
+  }
+
   setupEventListeners();
   loadData();
 
@@ -566,7 +703,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('closeModalBtn').addEventListener('click', closeDetail);
 
-  // 实时时钟
   function updateClock() {
     const now = new Date();
     const s = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
@@ -575,7 +711,6 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(updateClock, 1000);
   updateClock();
 
-  // 定期刷新剩余天数
   setInterval(() => {
     recalcDays();
     renderStats();
