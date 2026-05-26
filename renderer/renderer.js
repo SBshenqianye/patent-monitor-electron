@@ -210,11 +210,11 @@ async function loadData() {
   btnRefresh.textContent = '🔄 刷新中...';
   btnRefresh.disabled = true;
 
+  // 如果之前有残留消息，清理（可选）
   if (currentRefreshMsg) {
     await removeMessage(currentRefreshMsg);
     currentRefreshMsg = null;
   }
-  currentRefreshMsg = addMessage('正在刷新数据...', 'info', 0);
 
   try {
     const result = await window.electronAPI.getData();
@@ -233,26 +233,19 @@ async function loadData() {
       renderAll();
       updateMatchInfo();
 
-      // 替换“正在刷新”消息为成功消息
-      if (currentRefreshMsg) {
-        await replaceMessage(currentRefreshMsg, `数据刷新成功，共 ${DATA.length} 条专利`, 'success');
-        currentRefreshMsg = null;
-      }
+      // 直接添加成功消息（不再替换）
+      addMessage(`数据刷新成功，共 ${DATA.length} 条专利`, 'success');
     } else {
       throw new Error('返回数据格式错误');
     }
   } catch (err) {
     console.error('加载数据异常:', err);
-    if (currentRefreshMsg) {
-      await replaceMessage(currentRefreshMsg, `刷新失败: ${err.message}`, 'error', 0);
-      currentRefreshMsg = null;
-    }
+    addMessage(`刷新失败: ${err.message}`, 'error', 0);
   } finally {
     btnRefresh.textContent = originalBtnText;
     btnRefresh.disabled = false;
   }
 }
-
 // ======================== 剩余天数计算 ========================
 function recalcDays() {
   const now = new Date();
