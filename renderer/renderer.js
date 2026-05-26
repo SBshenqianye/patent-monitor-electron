@@ -7,8 +7,8 @@ let currentTab = 'table';
 let pendingLoginName = null;
 
 // 用于跟踪当前进行中的任务消息，以便完成后删除
-let currentCrawlMsg = null;           // “开始一键爬取任务”消息（短暂显示，无需手动删）
-let currentCleaningRunningMsg = null; // “正在清洗数据...”消息（需要手动删除）
+let currentCrawlMsg = null;              // “开始一键爬取任务”消息（短暂显示，无需手动删）
+let currentCleaningRunningMsg = null;    // “正在清洗数据...”消息（需要手动删除）
 let currentRefreshMsg = null;
 
 // ======================== 消息列表管理 ========================
@@ -170,7 +170,7 @@ async function loadData() {
     console.error('加载数据异常:', err);
     if (currentRefreshMsg) removeMessage(currentRefreshMsg);
     currentRefreshMsg = null;
-    addMessage(`刷新失败: ${err.message}`, 'error');
+    addMessage(`刷新失败: ${err.message}`, 'error', 0);   // 错误消息不自动消失
     dotEl.className = 'status-dot error';
     statusEl.textContent = '刷新失败';
   } finally {
@@ -498,14 +498,13 @@ function handleCrawl() {
   statusEl.textContent = '正在启动爬虫...';
   dotEl.className = 'status-dot running';
   
-  // 开始消息只显示2秒后自动消失
   if (currentCrawlMsg) removeMessage(currentCrawlMsg);
   currentCrawlMsg = addMessage('开始一键爬取任务', 'info', 2000);
   
   window.electronAPI.runAllCrawlers().catch(err => {
     if (currentCrawlMsg) removeMessage(currentCrawlMsg);
     currentCrawlMsg = null;
-    addMessage(`爬取失败: ${err.message}`, 'error');
+    addMessage(`爬取失败: ${err.message}`, 'error', 0);
     statusEl.textContent = '爬取启动失败';
     dotEl.className = 'status-dot error';
     btn.disabled = false;
@@ -522,18 +521,16 @@ function handleClean() {
   statusEl.textContent = '正在启动清洗...';
   dotEl.className = 'status-dot running';
   
-  // 开始消息只显示1秒后自动消失
   addMessage('开始一键清洗任务', 'info', 1000);
   
   window.electronAPI.runCleaning().then(() => {
     // 清洗成功会在 onCleaningStatus 的 completed 里处理
   }).catch(err => {
-    // 如果清洗启动失败，删除可能存在的运行中消息
     if (currentCleaningRunningMsg) {
       removeMessage(currentCleaningRunningMsg);
       currentCleaningRunningMsg = null;
     }
-    addMessage(`清洗失败: ${err.message}`, 'error');
+    addMessage(`清洗失败: ${err.message}`, 'error', 0);
     statusEl.textContent = '清洗启动失败';
     dotEl.className = 'status-dot error';
     btn.disabled = false;
@@ -555,7 +552,10 @@ function closeLoginModal() {
 
 function startLogin() {
   if (pendingLoginName) {
-    window.electronAPI.guideLogin(pendingLoginName).catch(err => console.error('登录引导失败:', err));
+    window.electronAPI.guideLogin(pendingLoginName).catch(err => {
+      console.error('登录引导失败:', err);
+      addMessage(`登录引导失败: ${err.message}`, 'error', 0);
+    });
   }
   closeLoginModal();
 }
@@ -578,12 +578,11 @@ function setupEventListeners() {
       } else if (status.status === 'error') {
         dotEl.className = 'status-dot error';
         statusEl.textContent = status.message;
-        addMessage(`${status.name} 失败: ${status.message}`, 'error');
+        addMessage(`${status.name} 失败: ${status.message}`, 'error', 0);
       }
     }
     
     if (status.name === 'all' && status.allDone) {
-      // 爬虫开始消息已经自动消失，无需删除
       addMessage(`✅ 一键爬取完成`, 'success');
       dotEl.className = 'status-dot success';
       statusEl.textContent = '就绪';
@@ -607,14 +606,12 @@ function setupEventListeners() {
     if (status.status === 'running') {
       dotEl.className = 'status-dot running';
       statusEl.textContent = status.message;
-      // 如果已经有正在运行的消息，先删除旧的（避免重复）
       if (currentCleaningRunningMsg) {
         removeMessage(currentCleaningRunningMsg);
       }
       currentCleaningRunningMsg = addMessage('正在清洗数据...', 'info', 0);
     } 
     else if (status.status === 'completed') {
-      // 删除“正在清洗数据...”消息
       if (currentCleaningRunningMsg) {
         removeMessage(currentCleaningRunningMsg);
         currentCleaningRunningMsg = null;
@@ -633,12 +630,11 @@ function setupEventListeners() {
       }, 3000);
     } 
     else if (status.status === 'error') {
-      // 删除“正在清洗数据...”消息
       if (currentCleaningRunningMsg) {
         removeMessage(currentCleaningRunningMsg);
         currentCleaningRunningMsg = null;
       }
-      addMessage(`清洗失败: ${status.message}`, 'error');
+      addMessage(`清洗失败: ${status.message}`, 'error', 0);
       dotEl.className = 'status-dot error';
       statusEl.textContent = status.message;
       document.getElementById('btnClean').disabled = false;
