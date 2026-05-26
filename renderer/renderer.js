@@ -11,6 +11,9 @@ let currentCrawlMsg = null;              // “开始一键爬取任务”消息
 let currentCleaningRunningMsg = null;    // “正在清洗数据...”消息（需要手动删除）
 let currentRefreshMsg = null;
 
+// 跟踪每个爬虫的“正在运行”消息对象
+const runningCrawlerMessages = new Map();
+
 // ======================== 消息列表管理 ========================
 function addMessage(text, type = 'info', duration = 5000) {
     const container = document.getElementById('messageList');
@@ -51,24 +54,36 @@ function addMessage(text, type = 'info', duration = 5000) {
         msgDiv._autoTimer = timer;
     }
     
-    // 每次添加消息后更新顶部状态栏
     updateTopStatusFromMessages();
-    
     return msgDiv;
 }
 
+// 移除消息，返回 Promise，在动画结束后 resolve
 function removeMessage(msgDiv) {
-    if (!msgDiv || !msgDiv.parentNode) return;
-    if (msgDiv._autoTimer) {
-        clearTimeout(msgDiv._autoTimer);
-        msgDiv._autoTimer = null;
+    return new Promise((resolve) => {
+        if (!msgDiv || !msgDiv.parentNode) {
+            resolve();
+            return;
+        }
+        if (msgDiv._autoTimer) {
+            clearTimeout(msgDiv._autoTimer);
+            msgDiv._autoTimer = null;
+        }
+        msgDiv.style.opacity = '0';
+        setTimeout(() => {
+            if (msgDiv.parentNode) msgDiv.remove();
+            updateTopStatusFromMessages();
+            resolve();
+        }, 320);
+    });
+}
+
+// 替换消息：先删除旧消息（等待动画结束），再添加新消息
+async function replaceMessage(oldMsg, newText, newType = 'success', newDuration = 5000) {
+    if (oldMsg) {
+        await removeMessage(oldMsg);
     }
-    msgDiv.style.opacity = '0';
-    setTimeout(() => {
-        if (msgDiv.parentNode) msgDiv.remove();
-        // 移除后更新顶部状态栏
-        updateTopStatusFromMessages();
-    }, 300);
+    return addMessage(newText, newType, newDuration);
 }
 
 function clearAllMessages() {
@@ -79,11 +94,10 @@ function clearAllMessages() {
         if (msg._autoTimer) clearTimeout(msg._autoTimer);
     });
     container.innerHTML = '';
-    // 清空全局引用
     currentRefreshMsg = null;
     currentCrawlMsg = null;
     currentCleaningRunningMsg = null;
-    // 更新顶部状态栏
+    runningCrawlerMessages.clear();
     updateTopStatusFromMessages();
 }
 
@@ -106,11 +120,9 @@ function updateTopStatusFromMessages() {
 
     const messages = Array.from(container.children);
     
-    // 优先级：error > warning > running-info > 其他info
     let selectedMsg = null;
     let selectedType = null;
     
-    // 倒序遍历（最新的在前，但我们取最新的一条符合优先级的即可）
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         const type = msg.classList.contains('error') ? 'error' :
@@ -126,18 +138,15 @@ function updateTopStatusFromMessages() {
         if (type === 'warning' && !selectedMsg) {
             selectedMsg = text;
             selectedType = 'warning';
-            // 继续看有没有 error，所以不 break
         }
         if (type === 'info' && !selectedMsg) {
-            // 如果是“正在运行”类的信息，优先于普通 info
             if (text.includes('正在运行') || text.includes('正在启动') || text.includes('正在清洗') || text.includes('正在刷新')) {
                 selectedMsg = text;
                 selectedType = 'info';
-                // 不再继续，因为 running 比普通 info 优先级高，但低于 error/warning
-                // 这里不能 break，因为后面可能还有 warning/error，但我们是倒序，所以如果前面已经有 running，后面不会有更高优先级（因为后面是更旧的消息），可以直接 break？
-                // 为了简单，我们找到 running 后不 break，但继续循环看是否有 error/warning，但循环是倒序，后面更旧的消息不可能有更高优先级，所以可以 break
-                // 但为了逻辑清晰，我们直接 break（因为倒序保证了最新消息优先）
                 break;
+            } else if (!selectedMsg) {
+                selectedMsg = text;
+                selectedType = 'info';
             }
         }
     }
@@ -201,7 +210,10 @@ async function loadData() {
   btnRefresh.textContent = '🔄 刷新中...';
   btnRefresh.disabled = true;
 
-  if (currentRefreshMsg) removeMessage(currentRefreshMsg);
+  if (currentRefreshMsg) {
+    await removeMessage(currentRefreshMsg);
+    currentRefreshMsg = null;
+  }
   currentRefreshMsg = addMessage('正在刷新数据...', 'info', 0);
 
   try {
@@ -221,17 +233,20 @@ async function loadData() {
       renderAll();
       updateMatchInfo();
 
-      if (currentRefreshMsg) removeMessage(currentRefreshMsg);
-      currentRefreshMsg = null;
-      addMessage(`数据刷新成功，共 ${DATA.length} 条专利`, 'success');
+      // 替换“正在刷新”消息为成功消息
+      if (currentRefreshMsg) {
+        await replaceMessage(currentRefreshMsg, `数据刷新成功，共 ${DATA.length} 条专利`, 'success');
+        currentRefreshMsg = null;
+      }
     } else {
       throw new Error('返回数据格式错误');
     }
   } catch (err) {
     console.error('加载数据异常:', err);
-    if (currentRefreshMsg) removeMessage(currentRefreshMsg);
-    currentRefreshMsg = null;
-    addMessage(`刷新失败: ${err.message}`, 'error', 0);
+    if (currentRefreshMsg) {
+      await replaceMessage(currentRefreshMsg, `刷新失败: ${err.message}`, 'error', 0);
+      currentRefreshMsg = null;
+    }
   } finally {
     btnRefresh.textContent = originalBtnText;
     btnRefresh.disabled = false;
@@ -545,12 +560,17 @@ function handleCrawl() {
   btn.disabled = true;
   btn.textContent = '⏳ 爬取中...';
   
-  if (currentCrawlMsg) removeMessage(currentCrawlMsg);
+  if (currentCrawlMsg) {
+    removeMessage(currentCrawlMsg);
+    currentCrawlMsg = null;
+  }
   currentCrawlMsg = addMessage('开始一键爬取任务', 'info', 2000);
   
   window.electronAPI.runAllCrawlers().catch(err => {
-    if (currentCrawlMsg) removeMessage(currentCrawlMsg);
-    currentCrawlMsg = null;
+    if (currentCrawlMsg) {
+      removeMessage(currentCrawlMsg);
+      currentCrawlMsg = null;
+    }
     addMessage(`爬取失败: ${err.message}`, 'error', 0);
     btn.disabled = false;
     btn.textContent = '🚀 一键爬取';
@@ -601,52 +621,76 @@ function startLogin() {
 
 // ======================== 事件监听（来自主进程） ========================
 function setupEventListeners() {
-  window.electronAPI.onCrawlerStatus((status) => {
+  window.electronAPI.onCrawlerStatus(async (status) => {
     console.log('爬虫状态:', status);
     
     if (status.name !== 'all') {
       if (status.status === 'running') {
-        addMessage(status.message, 'info', 0);
-      } else if (status.status === 'completed') {
-        addMessage(`${status.name} 完成`, 'success');
-      } else if (status.status === 'error') {
-        addMessage(`${status.name} 失败: ${status.message}`, 'error', 0);
+        // 如果已经存在该爬虫的运行消息，先删除（避免重复）
+        if (runningCrawlerMessages.has(status.name)) {
+          await removeMessage(runningCrawlerMessages.get(status.name));
+          runningCrawlerMessages.delete(status.name);
+        }
+        const msg = addMessage(status.message, 'info', 0);
+        runningCrawlerMessages.set(status.name, msg);
+      } 
+      else if (status.status === 'completed') {
+        const oldMsg = runningCrawlerMessages.get(status.name);
+        if (oldMsg) {
+          await replaceMessage(oldMsg, `${status.name} 完成`, 'success');
+          runningCrawlerMessages.delete(status.name);
+        } else {
+          addMessage(`${status.name} 完成`, 'success');
+        }
+      } 
+      else if (status.status === 'error') {
+        const oldMsg = runningCrawlerMessages.get(status.name);
+        if (oldMsg) {
+          await replaceMessage(oldMsg, `${status.name} 失败: ${status.message}`, 'error', 0);
+          runningCrawlerMessages.delete(status.name);
+        } else {
+          addMessage(`${status.name} 失败: ${status.message}`, 'error', 0);
+        }
       }
     }
     
     if (status.name === 'all' && status.allDone) {
-      addMessage(`一键爬取完成`, 'success');
-      loadData();
+      addMessage(`✅ 一键爬取完成`, 'success');
+      // 可选：自动开始清洗（取消注释即可）
+      // handleClean();
+      loadData();  // 刷新数据
       document.getElementById('btnCrawl').disabled = false;
       document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
     }
   });
 
-  window.electronAPI.onCleaningStatus((status) => {
+  window.electronAPI.onCleaningStatus(async (status) => {
     console.log('清洗状态:', status);
     
     if (status.status === 'running') {
       if (currentCleaningRunningMsg) {
-        removeMessage(currentCleaningRunningMsg);
+        await removeMessage(currentCleaningRunningMsg);
       }
       currentCleaningRunningMsg = addMessage('正在清洗数据...', 'info', 0);
     } 
     else if (status.status === 'completed') {
       if (currentCleaningRunningMsg) {
-        removeMessage(currentCleaningRunningMsg);
+        await replaceMessage(currentCleaningRunningMsg, '数据清洗完成', 'success');
         currentCleaningRunningMsg = null;
+      } else {
+        addMessage('数据清洗完成', 'success');
       }
-      addMessage('数据清洗完成', 'success');
       loadData();
       document.getElementById('btnClean').disabled = false;
       document.getElementById('btnClean').textContent = '🧹 一键清洗';
     } 
     else if (status.status === 'error') {
       if (currentCleaningRunningMsg) {
-        removeMessage(currentCleaningRunningMsg);
+        await replaceMessage(currentCleaningRunningMsg, `清洗失败: ${status.message}`, 'error', 0);
         currentCleaningRunningMsg = null;
+      } else {
+        addMessage(`清洗失败: ${status.message}`, 'error', 0);
       }
-      addMessage(`清洗失败: ${status.message}`, 'error', 0);
       document.getElementById('btnClean').disabled = false;
       document.getElementById('btnClean').textContent = '🧹 一键清洗';
     }
