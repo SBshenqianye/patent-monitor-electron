@@ -128,7 +128,9 @@ body {
 
 .btn-outline:hover:not(:disabled) {
     background: #f5f7fa;
-    border-color: #a0a7b5;
+    /* border-color: #a0a7b5; */
+    box-shadow: 0 4px 12px rgba(234, 237, 235, 0.4);
+    transform: translateY(-1px);
 }
 
 /* ============================================================

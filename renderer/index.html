@@ -44,15 +44,15 @@
   <!-- 工具栏 -->
   <div class="toolbar">
     <input type="text" id="searchInput" placeholder="🔍 搜索标题/申请号/发明人/申请人/代理机构...">
-    <select id="sortSelect">
+    <select id="sortSelect" aria-label="排序">
       <option value="days_asc">剩余天数 ↑ 最紧急优先</option>
       <option value="days_desc">剩余天数 ↓</option>
       <option value="apply_desc">申请日 ↓ 最新优先</option>
       <option value="apply_asc">申请日 ↑</option>
       <option value="title">专利名称 A-Z</option>
     </select>
-    <select id="typeFilter"><option value="">全部类型</option></select>
-    <select id="yearFilter"><option value="">全部年份</option></select>
+    <select id="typeFilter"  aria-label="筛选专利类型"><option value="">全部类型</option></select>
+    <select id="yearFilter"  aria-label="筛选专利年份"><option value="">全部年份</option></select>
     <span id="matchInfo" style="font-size:12px;color:#888;margin-left:auto"></span>
   </div>
 
@@ -65,7 +65,7 @@
   <!-- 列表面板 -->
   <div class="panel" id="tab-table">
     <table>
-      <thead><tr>
+      <thead>——
         <th style="width:60px">状态</th>
         <th style="width:80px">剩余天数</th>
         <th style="width:90px">申请号</th>
@@ -77,7 +77,8 @@
         <th style="width:120px">代理机构</th>
         <th style="width:60px">类型</th>
         <th style="width:100px">数据来源</th>
-      </tr></thead>
+      </tr>
+      </thead>
       <tbody id="tableBody"></tbody>
     </table>
     <div class="no-data" id="noDataMsg" style="display:none;text-align:center;padding:60px;color:#bbb;font-size:15px">没有匹配的专利</div>

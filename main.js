@@ -172,7 +172,7 @@ async function runAllCrawlers() {
 async function runCleaning() {
     sendToRenderer('cleaning-status', { status: 'running', message: '正在清洗数据...' });
     try {
-        const scriptPath = getScriptPath('01_数据清洗融合.py');
+        const scriptPath = getScriptPath('00_数据清洗融合.py');
         if (!fs.existsSync(scriptPath)) {
             throw new Error(`脚本不存在: ${scriptPath}`);
         }
@@ -189,7 +189,7 @@ async function runCleaning() {
 // 读取最终 JSON（兼容纯数组格式）
 // ============================================================
 function readCleanedJson() {
-    const jsonPath = path.join(dataDir, 'cleaned_data.json');
+    const jsonPath = path.join(dataDir, "cleaned_data", '专利数据_清洗融合.json');
     if (!fs.existsSync(jsonPath)) return null;
     try {
         const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
@@ -279,11 +279,17 @@ function setupIPC() {
         return await runCleaning();
     });
 
+    // 检查登录状态（简化实现，实际由爬虫脚本在内部检测并发送 login-required）
+    ipcMain.handle('check-login', async (event, name) => {
+        // 这里可以查询某个标记文件，但为了简单，返回未登录，让前端调用 guide-login
+        return { loggedIn: false };
+    });
+
     // 引导登录（打开浏览器让用户登录）
     ipcMain.handle('guide-login', async (event, name) => {
         const scriptMap = {
-            '爬虫B-CNIPA': '04_CNIPA专利导出.py',
-            '爬虫C-天眼查': '03_天眼查专利导出.py',
+            '爬虫B-CNIPA': '03_CNIPA专利导出.py',
+            '爬虫C-天眼查': '02_天眼查专利导出.py',
         };
         const scriptName = scriptMap[name];
         if (!scriptName) return { success: false, error: '未知爬虫' };
@@ -299,9 +305,7 @@ function setupIPC() {
             // 触发登录完成事件（通知等待中的 runCrawler）
             loginEvents.emit(`login-done-${name}`);
             // 同时通知渲染进程登录已完成
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('login-done', { name });
-            }
+            sendToRenderer('login-done', { name });
             return { success: true };
         } catch (err) {
             // 即使登录失败也要放行，否则 runCrawler 会永远等待
