@@ -19,6 +19,11 @@ function addMessage(text, type = 'info', duration = 5000) {
     const container = document.getElementById('messageList');
     if (!container) return null;
 
+    // 获取最大高度（数值，单位px）
+    const maxHeight = 180; // 与 CSS 中的 max-height 一致
+    const oldHeight = Math.min(container.scrollHeight, maxHeight);
+    container.style.height = oldHeight + 'px';
+
     const msgDiv = document.createElement('div');
     msgDiv.className = `message-item ${type}`;
     
@@ -45,7 +50,21 @@ function addMessage(text, type = 'info', duration = 5000) {
     });
     
     container.appendChild(msgDiv);
+    // 滚动到底部（新消息可见）
     container.scrollTop = container.scrollHeight;
+    
+    // 强制重绘
+    container.offsetHeight;
+    // 新高度：不超过 maxHeight
+    let newHeight = container.scrollHeight;
+    if (newHeight > maxHeight) newHeight = maxHeight;
+    container.style.height = newHeight + 'px';
+    
+    const onTransitionEnd = () => {
+        container.style.height = '';
+        container.removeEventListener('transitionend', onTransitionEnd);
+    };
+    container.addEventListener('transitionend', onTransitionEnd);
     
     if (duration > 0) {
         const timer = setTimeout(() => {
@@ -58,10 +77,14 @@ function addMessage(text, type = 'info', duration = 5000) {
     return msgDiv;
 }
 
-// 移除消息，返回 Promise，在动画结束后 resolve
 function removeMessage(msgDiv) {
     return new Promise((resolve) => {
         if (!msgDiv || !msgDiv.parentNode) {
+            resolve();
+            return;
+        }
+        const container = document.getElementById('messageList');
+        if (!container) {
             resolve();
             return;
         }
@@ -69,36 +92,105 @@ function removeMessage(msgDiv) {
             clearTimeout(msgDiv._autoTimer);
             msgDiv._autoTimer = null;
         }
-        msgDiv.style.opacity = '0';
-        setTimeout(() => {
+        
+        // 移除前，记录当前可见高度（受限）
+        const maxHeight = 180;
+        const oldHeight = Math.min(container.scrollHeight, maxHeight);
+        container.style.height = oldHeight + 'px';
+        
+        msgDiv.classList.add('removing');
+        
+        const onTransitionEnd = () => {
+            msgDiv.removeEventListener('transitionend', onTransitionEnd);
             if (msgDiv.parentNode) msgDiv.remove();
-            updateTopStatusFromMessages();
-            resolve();
-        }, 320);
+            
+            // 重新计算新高度
+            container.offsetHeight;
+            let newHeight = container.scrollHeight;
+            if (newHeight > maxHeight) newHeight = maxHeight;
+            container.style.height = newHeight + 'px';
+            
+            const onParentTransitionEnd = () => {
+                container.style.height = '';
+                container.removeEventListener('transitionend', onParentTransitionEnd);
+                updateTopStatusFromMessages();
+                resolve();
+            };
+            container.addEventListener('transitionend', onParentTransitionEnd);
+            if (oldHeight === newHeight) {
+                container.style.height = '';
+                updateTopStatusFromMessages();
+                resolve();
+            }
+        };
+        msgDiv.addEventListener('transitionend', onTransitionEnd);
+        
+        setTimeout(() => {
+            if (msgDiv.parentNode) {
+                msgDiv.removeEventListener('transitionend', onTransitionEnd);
+                msgDiv.remove();
+                // 同样需要处理高度
+                container.offsetHeight;
+                let newHeight = container.scrollHeight;
+                if (newHeight > maxHeight) newHeight = maxHeight;
+                container.style.height = newHeight + 'px';
+                setTimeout(() => {
+                    container.style.height = '';
+                    updateTopStatusFromMessages();
+                    resolve();
+                }, 300);
+            }
+        }, 300);
     });
-}
-
-// 替换消息：先删除旧消息（等待动画结束），再添加新消息
-async function replaceMessage(oldMsg, newText, newType = 'success', newDuration = 5000) {
-    if (oldMsg) {
-        await removeMessage(oldMsg);
-    }
-    return addMessage(newText, newType, newDuration);
 }
 
 function clearAllMessages() {
     const container = document.getElementById('messageList');
     if (!container) return;
     const messages = Array.from(container.children);
+    if (messages.length === 0) return;
+    
+    const maxHeight = 180;
+    const oldHeight = Math.min(container.scrollHeight, maxHeight);
+    container.style.height = oldHeight + 'px';
+    
+    let remaining = messages.length;
+    const onOneRemoved = () => {
+        remaining--;
+        if (remaining === 0) {
+            // 所有消息都移除了，最终高度为0
+            container.offsetHeight;
+            container.style.height = '0px';
+            setTimeout(() => {
+                container.style.height = '';
+                updateTopStatusFromMessages();
+            }, 250);
+        }
+    };
+    
     messages.forEach(msg => {
         if (msg._autoTimer) clearTimeout(msg._autoTimer);
+        msg.classList.add('removing');
+        const onEnd = () => {
+            msg.removeEventListener('transitionend', onEnd);
+            if (msg.parentNode) msg.remove();
+            onOneRemoved();
+        };
+        msg.addEventListener('transitionend', onEnd);
+        setTimeout(onEnd, 300);
     });
-    container.innerHTML = '';
+    
     currentRefreshMsg = null;
     currentCrawlMsg = null;
     currentCleaningRunningMsg = null;
     runningCrawlerMessages.clear();
-    updateTopStatusFromMessages();
+}
+
+async function replaceMessage(oldMsg, newText, newType = 'success', newDuration = 5000) {
+    if (oldMsg) {
+        await removeMessage(oldMsg);
+    }
+    return addMessage(newText, newType, newDuration);
 }
 
 function escapeHtml(str) {
@@ -210,7 +302,6 @@ async function loadData() {
   btnRefresh.textContent = '🔄 刷新中...';
   btnRefresh.disabled = true;
 
-  // 如果之前有残留消息，清理（可选）
   if (currentRefreshMsg) {
     await removeMessage(currentRefreshMsg);
     currentRefreshMsg = null;
@@ -233,7 +324,6 @@ async function loadData() {
       renderAll();
       updateMatchInfo();
 
-      // 直接添加成功消息（不再替换）
       addMessage(`数据刷新成功，共 ${DATA.length} 条专利`, 'success');
     } else {
       throw new Error('返回数据格式错误');
@@ -246,6 +336,7 @@ async function loadData() {
     btnRefresh.disabled = false;
   }
 }
+
 // ======================== 剩余天数计算 ========================
 function recalcDays() {
   const now = new Date();
@@ -619,7 +710,6 @@ function setupEventListeners() {
     
     if (status.name !== 'all') {
       if (status.status === 'running') {
-        // 如果已经存在该爬虫的运行消息，先删除（避免重复）
         if (runningCrawlerMessages.has(status.name)) {
           await removeMessage(runningCrawlerMessages.get(status.name));
           runningCrawlerMessages.delete(status.name);
@@ -651,7 +741,7 @@ function setupEventListeners() {
       addMessage(`✅ 一键爬取完成`, 'success');
       // 可选：自动开始清洗（取消注释即可）
       // handleClean();
-      loadData();  // 刷新数据
+      loadData();
       document.getElementById('btnCrawl').disabled = false;
       document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
     }
