@@ -96,6 +96,13 @@ body {
     cursor: not-allowed;
 }
 
+/* 按钮点击时的瞬间反馈 */
+.btn:active:not(:disabled) {
+    transform: translateY(1px);    /* 向下微微移动，制造按下感 */
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);  /* 缩小阴影，模拟被压下去 */
+    transition: all 0.05s ease;    /* 极快的过渡，模拟硬按下 */
+}
+
 .btn-primary {
     background: linear-gradient(135deg, #1a73e8, #1557b0);
     color: #fff;
@@ -131,6 +138,11 @@ body {
     /* border-color: #a0a7b5; */
     box-shadow: 0 4px 12px rgba(234, 237, 235, 0.4);
     transform: translateY(-1px);
+}
+
+.btn-outline:active:not(:disabled) {
+    background: #e9ecef;          /* 变深一点 */
+    transform: scale(0.98);       /* 轻微缩小 */
 }
 
 /* ============================================================
