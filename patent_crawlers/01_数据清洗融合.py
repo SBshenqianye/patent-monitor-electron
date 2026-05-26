@@ -1,301 +1,375 @@
 # -*- coding: utf-8 -*-
 """
-专利数据清洗融合 v5.0 (Electron版)
-支持命令行参数: --data-dir <path>
-从指定数据目录读取三个爬虫的输出文件，合并清洗后输出 cleaned_data.json
+专利数据清洗融合 v4.0 (Electron版)
+从临时目录读取爬虫输出的JSON文件，融合后输出 cleaned_data.json
 """
 
-import os, re, json, csv, sys, argparse
+import os, re, json, sys, argparse, glob
 from datetime import datetime, date
 from collections import Counter
-import glob
 
 
 def safe_str(v):
-    return str(v or '')
+    if v is None:
+        return ''
+    if isinstance(v, (int, float)):
+        return str(v)
+    return str(v).strip()
 
 
-# ========== 1. 读取Excel ==========
-def read_new_excel(path):
-    import openpyxl
-    wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb.active
+# ========== 解析地址（从CSV样式的地址字段提取）==========
+def parse_address(raw_addr):
+    """解析地址字段，提取分类号、代理人、摘要等"""
+    result = {"addr_clean": "", "classification": "", "patentAgency": "", "patentAgent": "", "abstract": "", "zipcode": ""}
+    if not raw_addr or raw_addr.strip() in ['', '""']:
+        return result
 
-    headers = {}
-    for c in range(1, ws.max_column + 1):
-        headers[c] = str(ws.cell(1, c).value or '').strip()
+    text = re.sub(r'\s+', ' ', raw_addr).strip().strip('"\'')
 
-    def find_col(keywords):
-        for c, h in headers.items():
-            for kw in keywords:
-                if h == kw or kw in h:
-                    return c - 1
-        return None
-
-    col_map = {
-        'applyId': find_col(['申请号']),
-        'pubId': find_col(['公开（公告）号', '公开公告号', '公开号']),
-        'applyDate': find_col(['申请日']),
-        'pubDate': find_col(['公开（公告）日', '公开公告日', '公开日']),
-        'classification': find_col(['IPC分类号', 'IPC']),
-        'applicant': find_col(['申请（专利权）人', '申请人', '专利权人']),
-        'inventor': find_col(['发明人']),
-        'title': find_col(['发明名称', '专利名称', '名称']),
-        'priority': find_col(['优先权号']),
-        'patentAgent': find_col(['专利代理师', '代理人']),
-        'patentAgency': find_col(['专利代理机构', '代理机构']),
-        'patentType': find_col(['文献类型']),
-        'abstract': find_col(['摘要']),
-        'zipcode': find_col(['邮编', '邮政编码']),
-    }
-
-    addr_col = find_col(['地址'])
-    if addr_col is None:
-        for c, h in headers.items():
-            if '地址' in h:
-                addr_col = c - 1
-                break
-
-    records = []
-    for r in range(2, ws.max_row + 1):
-        row = [str(ws.cell(r, c).value or '').strip() for c in range(1, ws.max_column + 1)]
-        rec = {}
-        for k, ci in col_map.items():
-            if ci is not None and ci < len(row):
-                rec[k] = row[ci]
-        if addr_col is not None and addr_col < len(row):
-            rec['address'] = row[addr_col]
-        records.append(rec)
-
-    print(f"  Excel共读取 {len(records)} 条记录")
-    wb.close()
-    return records
-
-
-# ========== 2. 读取CSV（专利公告）==========
-def read_patent_csv(path):
-    records = []
-    with open(path, 'r', encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            records.append(dict(row))
-    print(f"  CSV共读取 {len(records)} 条记录: {path}")
-    return records
-
-
-# ========== 3. 读取天眼查JSON ==========
-def read_tianyan_json(path):
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    if isinstance(data, list):
-        print(f"  JSON共读取 {len(data)} 条记录 (列表)")
-        return data
-    elif isinstance(data, dict) and 'data' in data:
-        items = data['data']
-        print(f"  JSON共读取 {len(items)} 条记录 (data字段)")
-        return items
-    else:
-        print(f"  JSON读取: 字典类型，键: {list(data.keys())[:10]}")
-        return [data]
-
-
-# ========== 4. 标准化 ==========
-def normalize_date(d):
-    if not d or d in ('无', '未知', 'None', ''):
-        return None
-    d = str(d).strip()
-    for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d', '%Y年%m月%d日',
-                '%Y%m%d', '%Y-%m-%d %H:%M:%S', '%Y.%m'):
-        try:
-            return datetime.strptime(d, fmt).strftime('%Y-%m-%d')
-        except:
-            pass
-    m = re.match(r'(\d{4})[-/.]?(\d{1,2})[-/.]?(\d{1,2})?', d)
+    # 提取摘要
+    m = re.search(r'摘要[：:]\s*(.+?)(?:全部|发明专利申请|实用新型专利|外观设计|事务数据|$)', text, re.DOTALL)
     if m:
-        y, mo, da = m.group(1), m.group(2), m.group(3)
-        if da:
-            return f"{y}-{mo.zfill(2)}-{da.zfill(2)}"
-        return f"{y}-{mo.zfill(2)}"
-    return d
+        result['abstract'] = re.sub(r'\s+', ' ', m.group(1)).replace('全部', '').strip()
+
+    # 提取分类号
+    m = re.search(r'分类号[：:]\s*(.+?)(?:摘要|全部|发明专利申请|实用新型专利|外观设计|$)', text, re.DOTALL)
+    if m:
+        cls_text = m.group(1)
+        codes = re.findall(r'[A-Z]\d+[A-Z]\d+/\d+[\d\w\.;]*', cls_text)
+        cls_clean = '; '.join(c.strip('();，,; ') for c in codes)
+        if cls_clean:
+            result['classification'] = cls_clean
+
+    # 专利代理机构
+    m = re.search(r'专利代理机构[：:]\s*(.+?)(?:专利代理师|代理人|$)', text, re.DOTALL)
+    if m:
+        result['patentAgency'] = re.sub(r'\s+', ' ', m.group(1)).strip()
+
+    # 专利代理师/代理人
+    m = re.search(r'(?:专利代理师|代理人)[：:]\s*(.+?)(?:分类号|摘要|发明专利申请|$)', text, re.DOTALL)
+    if m:
+        result['patentAgent'] = re.sub(r'\s+', ' ', m.group(1)).strip()
+
+    # 地址：从开头到第一个关键词
+    addr = text
+    for kw in ["分类号", "摘要", "发明专利申请", "实用新型专利", "专利代理机构", "事务数据"]:
+        i = addr.find(kw)
+        if i > 0:
+            addr = addr[:i].strip()
+    addr = addr.replace('全部', '').strip(';，, ')
+
+    zipcode = ""
+    m = re.match(r'(\d{6})', addr)
+    if m:
+        zipcode = m.group(1)
+        addr = addr[len(zipcode):].strip()
+
+    result['addr_clean'] = addr
+    result['zipcode'] = zipcode
+    return result
 
 
-def normalize_patent_type(t):
-    if not t:
-        return '未知'
-    t = str(t).strip()
-    mapping = {
-        '发明': '发明专利', '发明公布': '发明专利', '发明授权': '发明专利',
-        '发明专利申请': '发明专利', '1': '发明专利', 'A': '发明专利',
-        '实用新型': '实用新型', '实用新型专利': '实用新型', '2': '实用新型', 'U': '实用新型',
-        '外观设计': '外观设计', '3': '外观设计', 'D': '外观设计',
-        '发明授权': '发明授权', 'B': '发明授权',
-    }
-    for k, v in mapping.items():
-        if k in t:
-            return v
-    return t
+# ========== 计算到期日 ==========
+def compute_expiry(apply_date_str, patent_type):
+    """计算到期日和剩余天数"""
+    if not apply_date_str:
+        return "", -1
+    for fmt in ["%Y-%m-%d", "%Y.%m.%d", "%Y年%m月%d日", "%Y/%m/%d"]:
+        try:
+            apply_date = datetime.strptime(apply_date_str[:10], fmt).date()
+            break
+        except ValueError:
+            continue
+    else:
+        return "", -1
+
+    years = 10
+    if '发明' in patent_type:
+        years = 20
+    elif '外观' in patent_type:
+        years = 15
+    try:
+        from calendar import monthrange
+        expiry_date = date(apply_date.year + years, apply_date.month, apply_date.day)
+    except ValueError:
+        last_day = monthrange(apply_date.year + years, apply_date.month)[1]
+        expiry_date = date(apply_date.year + years, apply_date.month, min(apply_date.day, last_day))
+
+    days = (expiry_date - date.today()).days
+    return expiry_date.strftime("%Y-%m-%d"), days
 
 
-def parse_ipc(code):
-    if not code:
-        return []
-    parts = re.split(r'[;；,，、\s]+', str(code))
-    return [p.strip() for p in parts if p.strip()]
+# ========== 标准化日期 ==========
+def standardize_date(d_str):
+    """统一日期格式为 YYYY-MM-DD"""
+    if not d_str or str(d_str).strip() in ['', '-']:
+        return ''
+    d_str = str(d_str).strip()
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', d_str):
+        return d_str
+    d_str = d_str.replace('年', '-').replace('月', '-').replace('日', '').replace('/', '-').replace('.', '-')
+    m = re.match(r'(\d{4})[^\d]*(\d{1,2})[^\d]*(\d{1,2})', d_str)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return d_str[:10]
 
 
-# ========== 5. 合并去重 ==========
-def merge_records(records, id_field='applyId'):
+# ========== 清洗（脚本A的核心逻辑）==========
+def clean(records):
+    cleaned = []
+    for rec in records:
+        item = {}
+
+        item['applyId'] = rec.get('applyId', '')
+        item['title'] = re.sub(r'\s+', ' ', rec.get('title', '')).strip()
+        item['applyDate'] = standardize_date(rec.get('applyDate', ''))
+        item['pubDate'] = standardize_date(rec.get('pubDate', ''))
+        item['applicant'] = re.sub(r'\s+', ' ', rec.get('applicant', '')).strip()
+        item['company'] = rec.get('company', '')
+
+        # 发明人清洗
+        inv = rec.get('inventor', '')
+        inv = re.sub(r'\s+', ' ', inv).replace('全部', '').strip('; ')
+        item['inventor'] = re.sub(r'[;；]+', ';', inv)
+
+        # 地址清洗
+        addr = (rec.get('address') or rec.get('addr_clean') or '').strip()
+        addr = re.sub(r'\s+', '', addr).replace('全部', '').strip(';，, ')
+        zipcode = rec.get('zipcode', '')
+        if not zipcode:
+            m = re.match(r'(\d{6})', addr)
+            if m:
+                zipcode = m.group(1)
+                addr = addr[6:].strip()
+        item['address'] = addr
+        item['zipcode'] = zipcode
+
+        # IPC分类清洗
+        cls = rec.get('classification', '')
+        cls = cls.replace('全部', '').replace(' ', '')
+        cls = re.sub(r'[;；]+', ';', cls).strip('; ')
+        cls = re.sub(r'\([\d.]+\)', '', cls)
+        item['classification'] = cls
+
+        # 专利类型归类
+        pt = (rec.get('patentType') or rec.get('patentTypeRaw') or '').strip()
+        pt = re.sub(r'\s+', '', pt)
+        tp = '发明'
+        if '实用' in pt:
+            tp = '实用新型'
+        elif '外观' in pt:
+            tp = '外观设计'
+        item['patentType'] = tp
+
+        # 法律状态
+        ls = rec.get('legalStatus', '')
+        if not ls:
+            ls = '未知'
+        item['legalStatus'] = ls
+
+        # 过期天数 - 优先使用已有的，否则根据申请日+类型推算
+        expiryDate = str(rec.get('expiryDate', '') or '')[:10]
+        daysRemaining = rec.get('daysRemaining', -1)
+        if not expiryDate or daysRemaining == -1:
+            expiryDate, daysRemaining = compute_expiry(item['applyDate'], tp)
+        item['expiryDate'] = expiryDate
+        item['daysRemaining'] = int(daysRemaining) if daysRemaining != '' else -1
+
+        # 申请年份
+        if item['applyDate'] and len(item['applyDate']) >= 4:
+            item['applyYear'] = int(item['applyDate'][:4])
+        else:
+            item['applyYear'] = 0
+
+        item['patentAgency'] = rec.get('patentAgency', '')
+        item['patentAgent'] = rec.get('patentAgent', '')
+        item['abstract'] = rec.get('abstract', '')
+        item['source'] = rec.get('source', '')
+
+        cleaned.append(item)
+    return cleaned
+
+
+# ========== 读取JSON文件（支持单个或多个文件）==========
+def read_json_files(file_paths):
+    records = []
+    for fpath in file_paths:
+        try:
+            with open(fpath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                records.extend(data)
+            elif isinstance(data, dict):
+                if 'rows' in data:
+                    records.extend(data['rows'])
+                elif 'records' in data:
+                    records.extend(data['records'])
+                elif 'data' in data:
+                    records.extend(data['data'])
+                else:
+                    records.append(data)
+            print(f"  读取JSON: {os.path.basename(fpath)} → {len(data) if isinstance(data, list) else 1} 条")
+        except Exception as e:
+            print(f"  ⚠ JSON读取失败 {os.path.basename(fpath)}: {e}")
+    return records
+
+
+# ========== 保存JSON ==========
+def save_json(records, output_path):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+    print(f"[OK] JSON: {output_path} ({len(records)}条)")
+
+
+# ========== 去重（按applyId + source去重）==========
+def remove_duplicates(records):
     seen = set()
     unique = []
-    for r in records:
-        key = r.get(id_field, '')
-        if key and key not in seen:
+    for rec in records:
+        key = (rec.get('applyId', ''), rec.get('source', ''))
+        if key not in seen:
             seen.add(key)
-            unique.append(r)
-    print(f"  去重: {len(records)} -> {len(unique)}")
+            unique.append(rec)
     return unique
 
 
-# ========== 6. 主函数 ==========
+# ========== 输出CSV ==========
+def save_csv(records, path):
+    import csv
+    fields = ['applyId', 'title', 'patentType', 'classification',
+              'applicant', 'inventor', 'applyDate', 'pubDate',
+              'expiryDate', 'daysRemaining', 'legalStatus',
+              'patentAgency', 'patentAgent', 'address', 'zipcode', 'company', 'abstract', 'source',
+              'applyYear']
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for rec in records:
+            row = {k: rec.get(k, '') for k in fields}
+            writer.writerow(row)
+    print(f"[OK] CSV: {path} ({len(records)}条)")
+
+
+# ========== 统计 ==========
+def stats(records):
+    n = len(records)
+    expired = sum(1 for r in records if r.get('daysRemaining', -1) <= 0)
+    urgent = sum(1 for r in records if 0 < r.get('daysRemaining', 0) <= 365)
+    warning = sum(1 for r in records if 365 < r.get('daysRemaining', 0) <= 1095)
+    safe = sum(1 for r in records if r.get('daysRemaining', 0) > 1095)
+    unknown = sum(1 for r in records if r.get('daysRemaining') is None)
+
+    print(f"\n📊 统计:")
+    print(f"  总计: {n} 条")
+    print(f"  已过期: {expired} 条")
+    print(f"  1年内到期: {urgent} 条")
+    print(f"  1-3年到期: {warning} 条")
+    print(f"  3年以上: {safe} 条")
+    if unknown:
+        print(f"  未知: {unknown} 条")
+
+    type_counts = Counter(r.get('patentType', '未知') for r in records)
+    print(f"\n📌 专利类型分布:")
+    for t, c in type_counts.most_common():
+        print(f"  {t}: {c} 条")
+
+    source_counts = Counter(r.get('source', '未知') for r in records)
+    print(f"\n📡 数据来源分布:")
+    for s, c in source_counts.most_common():
+        print(f"  {s}: {c} 条")
+
+    if n > 0:
+        print(f"\n📈 有效专利占比: {((safe + warning) / n * 100):.1f}%")
+
+
+# ========== 融合 ==========
+def merge(all_records):
+    """多来源融合拼接，保留所有字段"""
+    merged = []
+    for rec in all_records:
+        item = dict(rec)
+        # 标准化source
+        src = item.get('source', '')
+        if not src:
+            item['source'] = '未知'
+        merged.append(item)
+    return merged
+
+
+# ========== Main ==========
 def main():
     parser = argparse.ArgumentParser(description='专利数据清洗融合')
-    parser.add_argument('--data-dir', required=True, help='用户数据目录（包含爬虫输出文件）')
+    parser.add_argument('--data-dir', required=True, help='用户数据目录（包含爬虫输出JSON文件）')
     args = parser.parse_args()
 
     data_dir = args.data_dir
-    print(f"=" * 60)
-    print(f"专利数据清洗融合 v5.0")
+    print(f"{'=' * 70}")
+    print(f"专利数据清洗融合 v4.0 (Electron版)")
     print(f"数据目录: {data_dir}")
     print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"=" * 60)
+    print(f"{'=' * 70}")
 
-    all_records = []
+    # 读取所有JSON文件
+    json_files = sorted(glob.glob(os.path.join(data_dir, "*.json")))
+    if not json_files:
+        print("  ⚠ 未找到JSON文件")
+        result = {"success": False, "error": "未找到JSON文件"}
+        print(f"\n[RESULT]{json.dumps(result, ensure_ascii=False)}[/RESULT]")
+        return
 
-    # ----- 6.1 读取爬虫A（CSV）-----
-    csv_files = glob.glob(os.path.join(data_dir, "专利数据_v2_*.csv"))
-    csv_files += glob.glob(os.path.join(data_dir, "*.csv"))
-    if csv_files:
-        print(f"\n[爬虫A] 发现CSV文件: {len(csv_files)}个")
-        for fpath in csv_files:
-            print(f"  读取: {os.path.basename(fpath)}")
-            try:
-                recs = read_patent_csv(fpath)
-                for r in recs:
-                    r['_source'] = 'patent_announce'
-                all_records.extend(recs)
-            except Exception as e:
-                print(f"  [错误] 读取CSV失败: {e}")
-    else:
-        print(f"\n[爬虫A] 未找到CSV文件")
+    all_records = read_json_files(json_files)
+    print(f"  原始总数: {len(all_records)} 条")
 
-    # ----- 6.2 读取爬虫B（Excel/xlsx）-----
-    excel_files = glob.glob(os.path.join(data_dir, "*.xlsx"))
-    if excel_files:
-        print(f"\n[爬虫B] 发现Excel文件: {len(excel_files)}个")
-        for fpath in excel_files:
-            print(f"  读取: {os.path.basename(fpath)}")
-            try:
-                recs = read_new_excel(fpath)
-                for r in recs:
-                    r['_source'] = 'cnipa'
-                all_records.extend(recs)
-            except Exception as e:
-                print(f"  [错误] 读取Excel失败: {e}")
-    else:
-        print(f"\n[爬虫B] 未找到Excel文件")
+    # 去重
+    all_records = remove_duplicates(all_records)
+    print(f"  去重后: {len(all_records)} 条")
 
-    # ----- 6.3 读取爬虫C（JSON或xlsx）-----
-    json_files = glob.glob(os.path.join(data_dir, "*天眼查*.json"))
-    json_files += glob.glob(os.path.join(data_dir, "01_专利数据.json"))
-    if json_files:
-        print(f"\n[爬虫C] 发现JSON文件: {len(json_files)}个")
-        for fpath in json_files:
-            print(f"  读取: {os.path.basename(fpath)}")
-            try:
-                recs = read_tianyan_json(fpath)
-                for r in recs:
-                    r['_source'] = 'tianyancha'
-                all_records.extend(recs)
-            except Exception as e:
-                print(f"  [错误] 读取JSON失败: {e}")
-    else:
-        # 也可能天眼查输出的是xlsx
-        tianyan_xlsx = [f for f in excel_files if '天眼查' in f]
-        if tianyan_xlsx:
-            print(f"\n[爬虫C] 发现天眼查Excel文件: {len(tianyan_xlsx)}个")
-            for fpath in tianyan_xlsx:
-                try:
-                    recs = read_new_excel(fpath)
-                    for r in recs:
-                        r['_source'] = 'tianyancha'
-                    all_records.extend(recs)
-                except Exception as e:
-                    print(f"  [错误] 读取失败: {e}")
-        else:
-            print(f"\n[爬虫C] 未找到天眼查文件")
+    # 融合
+    merged = merge(all_records)
 
-    print(f"\n{'=' * 60}")
-    print(f"原始数据总量: {len(all_records)}")
+    # 清洗
+    print(f"\n[标准化清洗]...")
+    cleaned = clean(merged)
+    print(f"  清洗后: {len(cleaned)} 条")
 
-    # ----- 6.4 标准化 -----
-    print(f"\n[标准化处理]...")
-    normalized = []
-    for r in all_records:
-        nr = {}
-        for k, v in r.items():
-            nr[k] = safe_str(v)
+    # 输出
+    output_json = os.path.join(data_dir, "cleaned_data.json")
+    save_json(cleaned, output_json)
 
-        # 标准化日期
-        for dk in ['applyDate', 'pubDate', '申请日', '公开日', '公开公告日', '申请日期']:
-            if dk in nr:
-                nr[dk] = normalize_date(nr[dk])
+    # 输出全部字段版本
+    output_all_json = os.path.join(data_dir, "cleaned_data_all.json")
+    save_json(cleaned, output_all_json)
 
-        # 标准化类型
-        for tk in ['patentType', '专利类型', '文献类型', '类型']:
-            if tk in nr:
-                nr[tk] = normalize_patent_type(nr[tk])
+    output_csv = os.path.join(data_dir, "cleaned_data.csv")
+    save_csv(cleaned, output_csv)
 
-        # 标准化IPC
-        for ik in ['classification', 'IPC分类号', 'IPC', '分类号']:
-            if ik in nr and nr[ik]:
-                nr[ik + '_list'] = parse_ipc(nr[ik])
+    # 统计
+    stats(cleaned)
 
-        normalized.append(nr)
-
-    # ----- 6.5 去重 -----
-    print(f"\n[去重处理]...")
-    deduped = merge_records(normalized, id_field='申请号')
-    if len(deduped) < 10:
-        deduped = merge_records(normalized, id_field='applyId')
-    if len(deduped) < 10:
-        deduped = merge_records(normalized, id_field='pubId')
-    if len(deduped) < 10:
-        deduped = merge_records(normalized, id_field='公开（公告）号')
-
-    print(f"最终数据: {len(deduped)} 条")
-
-    # ----- 6.6 输出JSON -----
-    output_path = os.path.join(data_dir, "cleaned_data.json")
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(deduped, f, ensure_ascii=False, indent=2)
-    print(f"\n已输出: {output_path}")
-
-    # 返回统计信息（stdout输出JSON供Electron读取）
+    # 返回结果（stdout JSON供Electron读取）
     result = {
         "success": True,
         "total_raw": len(all_records),
-        "total_cleaned": len(deduped),
-        "output_file": output_path,
+        "total_cleaned": len(cleaned),
+        "output_file": output_json,
         "timestamp": datetime.now().isoformat(),
-        "sources": {
-            "patent_announce": len([r for r in all_records if r.get('_source') == 'patent_announce']),
-            "cnipa": len([r for r in all_records if r.get('_source') == 'cnipa']),
-            "tianyancha": len([r for r in all_records if r.get('_source') == 'tianyancha']),
+        "patent_types": dict(Counter(r['patentType'] for r in cleaned)),
+        "days_distribution": {
+            'expired': sum(1 for r in cleaned if r.get('daysRemaining', -1) <= 0),
+            'urgent': sum(1 for r in cleaned if 0 < r.get('daysRemaining', 0) <= 365),
+            'warning': sum(1 for r in cleaned if 365 < r.get('daysRemaining', 0) <= 1095),
+            'safe': sum(1 for r in cleaned if r.get('daysRemaining', 0) > 1095),
         }
     }
     print(f"\n[RESULT]{json.dumps(result, ensure_ascii=False)}[/RESULT]")
 
-    return deduped
+    print(f"\n{'=' * 70}")
+    print(f"数据清洗完成！")
+    print(f"{'=' * 70}")
+
+    return cleaned
 
 
 if __name__ == "__main__":

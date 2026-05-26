@@ -1,108 +1,132 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>专利监控看板</title>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-    <link rel="stylesheet" href="styles.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📊 专利监控看板</title>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <!-- 顶部导航栏 -->
-    <header class="app-header">
-        <div class="header-left">
-            <h1>📊 专利监控看板</h1>
-            <span class="subtitle">Patent Monitoring Dashboard</span>
-        </div>
-        <div class="header-right">
-            <span class="update-time" id="updateTime">最后更新：--</span>
-        </div>
-    </header>
+<!-- 顶部导航栏 -->
+<header class="app-header">
+  <div class="header-left">
+    <h1>📊 专利监控看板</h1>
+    <span class="subtitle">Patent Monitoring Dashboard</span>
+  </div>
+  <div class="header-right">
+    <span class="update-time">📅 数据更新: <span id="dataDate">--</span></span>
+    <span class="update-time" style="margin-left:14px">🕒 <strong id="liveClock">--</strong></span>
+  </div>
+</header>
 
-    <!-- 主内容区域 -->
-    <main class="app-main">
-        <!-- 操作按钮区 -->
-        <section class="action-bar">
-            <button class="btn btn-primary" id="btnCrawl" onclick="handleCrawl()">
-                🚀 一键爬取
-            </button>
-            <button class="btn btn-secondary" id="btnClean" onclick="handleClean()">
-                🧹 一键清洗
-            </button>
-            <button class="btn btn-outline" id="btnRefresh" onclick="loadData()">
-                🔄 刷新数据
-            </button>
-        </section>
+<!-- 主内容区 -->
+<main class="app-main">
+  <!-- 操作按钮区 -->
+  <section class="action-bar">
+    <button class="btn btn-primary" id="btnCrawl" onclick="handleCrawl()">🚀 一键爬取</button>
+    <button class="btn btn-secondary" id="btnClean" onclick="handleClean()">🧹 一键清洗</button>
+    <button class="btn btn-outline" id="btnRefresh" onclick="loadData()">🔄 刷新数据</button>
+  </section>
 
-        <!-- 状态信息区 -->
-        <section class="status-bar" id="statusBar">
-            <div class="status-item">
-                <span class="status-dot idle"></span>
-                <span id="crawlStatus">就绪</span>
-            </div>
-            <div class="status-item" id="crawlerDetails" style="display:none;">
-                <!-- 爬虫详情动态显示 -->
-            </div>
-        </section>
+  <!-- 状态信息区 -->
+  <section class="status-bar" id="statusBar">
+    <div class="status-item">
+      <span class="status-dot idle" id="statusDot"></span>
+      <span id="crawlStatus">就绪</span>
+    </div>
+    <div class="status-item" id="crawlerDetails" style="display:none;"></div>
+    <span id="statusInfo" style="font-size:12px;color:#888;margin-left:auto"></span>
+  </section>
 
-        <!-- 图表区 -->
-        <section class="charts-grid">
-            <!-- 第一行：专利状态分布 + 专利类型分布 -->
-            <div class="chart-card">
-                <div class="chart-title">专利法律状态分布</div>
-                <div id="chartStatus" class="chart-container"></div>
-            </div>
-            <div class="chart-card">
-                <div class="chart-title">专利类型分布</div>
-                <div id="chartType" class="chart-container"></div>
-            </div>
+  <!-- 统计卡片 -->
+  <section class="stats-bar" id="statsBar"></section>
 
-            <!-- 第二行：过期时间分布 -->
-            <div class="chart-card full-width">
-                <div class="chart-title">专利过期时间分布</div>
-                <div id="chartExpiry" class="chart-container"></div>
-            </div>
+  <!-- 工具栏 -->
+  <div class="toolbar">
+    <input type="text" id="searchInput" placeholder="🔍 搜索标题/申请号/发明人/申请人/代理机构...">
+    <select id="sortSelect">
+      <option value="days_asc">剩余天数 ↑ 最紧急优先</option>
+      <option value="days_desc">剩余天数 ↓</option>
+      <option value="apply_desc">申请日 ↓ 最新优先</option>
+      <option value="apply_asc">申请日 ↑</option>
+      <option value="title">专利名称 A-Z</option>
+    </select>
+    <select id="typeFilter"><option value="">全部类型</option></select>
+    <select id="yearFilter"><option value="">全部年份</option></select>
+    <span id="matchInfo" style="font-size:12px;color:#888;margin-left:auto"></span>
+  </div>
 
-            <!-- 第三行：历年申请趋势 -->
-            <div class="chart-card full-width">
-                <div class="chart-title">历年专利申请趋势</div>
-                <div id="chartTrend" class="chart-container"></div>
-            </div>
+  <!-- 标签切换 -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="table">📋 列表</button>
+    <button class="tab-btn" data-tab="chart">📊 图表分析</button>
+  </div>
 
-            <!-- 第四行：专利权人排名 -->
-            <div class="chart-card full-width">
-                <div class="chart-title">专利权人 Top 20</div>
-                <div id="chartAssignee" class="chart-container"></div>
-            </div>
-        </section>
+  <!-- 列表面板 -->
+  <div class="panel" id="tab-table">
+    <table>
+      <thead><tr>
+        <th style="width:60px">状态</th>
+        <th style="width:80px">剩余天数</th>
+        <th style="width:90px">申请号</th>
+        <th>专利名称</th>
+        <th style="width:85px">申请日</th>
+        <th style="width:85px">公开日</th>
+        <th style="width:90px">到期日</th>
+        <th style="width:100px">发明人</th>
+        <th style="width:120px">代理机构</th>
+        <th style="width:60px">类型</th>
+        <th style="width:100px">数据来源</th>
+      </tr></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+    <div class="no-data" id="noDataMsg" style="display:none;text-align:center;padding:60px;color:#bbb;font-size:15px">没有匹配的专利</div>
+  </div>
 
-        <!-- 登录提示弹窗 -->
-        <div class="modal-overlay" id="loginModal" style="display:none;">
-            <div class="modal-dialog">
-                <div class="modal-header">
-                    <h3>🔑 需要登录</h3>
-                </div>
-                <div class="modal-body">
-                    <p id="loginMessage">该爬虫需要登录网站才能使用。</p>
-                    <p>点击下方按钮将打开浏览器窗口，请完成登录后关闭浏览器。</p>
-                    <div class="login-tips">
-                        <h4>登录提示：</h4>
-                        <ul>
-                            <li>浏览器将以可见模式打开</li>
-                            <li>请在浏览器中手动完成登录（扫码/账号密码）</li>
-                            <li>登录成功后关闭浏览器窗口即可</li>
-                            <li>登录会话将被持久化保存，下次无需重复登录</li>
-                        </ul>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button class="btn btn-outline" onclick="closeLoginModal()">取消</button>
-                    <button class="btn btn-primary" id="btnStartLogin" onclick="startLogin()">开始登录</button>
-                </div>
-            </div>
-        </div>
-    </main>
+  <!-- 图表面板 -->
+  <div class="panel" id="tab-chart" style="display:none">
+    <div class="chart-grid">
+      <div class="chart-box"><h3>🗓️ 过期风险分布</h3><div id="pieChart"></div></div>
+      <div class="chart-box"><h3>📅 申请年份趋势</h3><div id="yearChart"></div></div>
+      <div class="chart-box"><h3>🏢 主要申请人 TOP 10</h3><div id="applicantChart"></div></div>
+      <div class="chart-box"><h3>🧪 专利类型分布</h3><div id="typeChart"></div></div>
+    </div>
+  </div>
+</main>
 
-    <script src="renderer.js"></script>
+<!-- 详情弹窗 -->
+<div class="modal-overlay" id="detailModal">
+  <div class="modal" style="position:relative">
+    <button class="close-modal" id="closeModalBtn">&times;</button>
+    <h2 id="detailTitle"></h2>
+    <div id="detailBody"></div>
+  </div>
+</div>
+
+<!-- 登录弹窗 -->
+<div class="modal-overlay" id="loginModal" style="display:none;">
+  <div class="modal-dialog">
+    <div class="modal-header"><h3>🔑 需要登录</h3></div>
+    <div class="modal-body">
+      <p id="loginMessage">该爬虫需要登录网站才能使用。</p>
+      <p>点击下方按钮将打开浏览器窗口，请完成登录后关闭浏览器。</p>
+      <div class="login-tips">
+        <h4>登录提示：</h4>
+        <ul>
+          <li>浏览器将以可见模式打开</li>
+          <li>请在浏览器中手动完成登录（扫码/账号密码）</li>
+          <li>登录成功后关闭浏览器窗口即可</li>
+          <li>登录会话将被持久化保存，下次无需重复登录</li>
+        </ul>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeLoginModal()">取消</button>
+      <button class="btn btn-primary" id="btnStartLogin" onclick="startLogin()">开始登录</button>
+    </div>
+  </div>
+</div>
+
+<script src="renderer.js"></script>
 </body>
 </html>

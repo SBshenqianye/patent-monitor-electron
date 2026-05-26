@@ -176,61 +176,299 @@ body {
     50% { opacity: 0.4; }
 }
 
-.crawler-status-item {
-    display: inline-block;
-    font-size: 12px;
-    color: #666;
-    margin-right: 16px;
-    padding: 2px 0;
-}
-
 /* ============================================================
-   图表网格布局
+   统计卡片 (复用前端A风格)
    ============================================================ */
 
-.charts-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
+.stats-bar {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
 }
 
-.chart-card {
+.stat-card {
     background: #fff;
-    border-radius: 12px;
-    padding: 16px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-    transition: box-shadow 0.2s ease;
+    border-radius: 10px;
+    padding: 14px 22px;
+    text-align: center;
+    min-width: 100px;
+    flex: 1;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+    border: 2px solid transparent;
 }
 
-.chart-card:hover {
+.stat-card:hover {
+    transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
 }
 
-.chart-card.full-width {
-    grid-column: 1 / -1;
+.stat-card.active {
+    border-color: #1a73e8;
+    background: #f0f7ff;
 }
 
-.chart-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: #444;
-    margin-bottom: 12px;
-    padding-bottom: 8px;
-    border-bottom: 2px solid #f0f2f5;
+.stat-card .num {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
 }
 
-.chart-container {
-    width: 100%;
-    height: 350px;
-}
-
-.chart-card.full-width .chart-container {
-    height: 400px;
+.stat-card .lbl {
+    font-size: 12px;
+    color: #888;
+    margin-top: 2px;
 }
 
 /* ============================================================
-   登录弹窗
+   工具栏
    ============================================================ */
+
+.toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.toolbar input,
+.toolbar select {
+    padding: 8px 12px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    font-size: 13px;
+    background: #fff;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.toolbar input:focus,
+.toolbar select:focus {
+    border-color: #1a73e8;
+    box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.15);
+}
+
+.toolbar input {
+    flex: 1;
+    min-width: 200px;
+}
+
+.toolbar select {
+    width: auto;
+    cursor: pointer;
+}
+
+/* ============================================================
+   标签切换
+   ============================================================ */
+
+.tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 16px;
+    border-bottom: 2px solid #e8ecf0;
+}
+
+.tab-btn {
+    padding: 10px 28px;
+    font-size: 14px;
+    font-weight: 500;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    cursor: pointer;
+    color: #888;
+    transition: all 0.2s;
+}
+
+.tab-btn:hover {
+    color: #555;
+}
+
+.tab-btn.active {
+    color: #1a73e8;
+    border-bottom-color: #1a73e8;
+}
+
+/* ============================================================
+   面板
+   ============================================================ */
+
+.panel {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+}
+
+/* ============================================================
+   表格
+   ============================================================ */
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+thead th {
+    background: #f8f9fc;
+    padding: 10px 10px;
+    text-align: left;
+    font-weight: 600;
+    color: #555;
+    border-bottom: 2px solid #e8ecf0;
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    font-size: 12px;
+}
+
+tbody td {
+    padding: 9px 10px;
+    border-bottom: 1px solid #f0f2f5;
+    vertical-align: middle;
+}
+
+tbody tr {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+tbody tr:hover {
+    background: #f5f8ff;
+}
+
+tbody tr.expired-row {
+    background: #fff2f0;
+}
+
+tbody tr.urgent-row {
+    background: #fffbe6;
+}
+
+.col-id {
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    color: #666;
+    word-break: break-all;
+}
+
+.col-title {
+    min-width: 160px;
+    color: #1a73e8;
+    font-weight: 500;
+}
+
+.col-agency {
+    font-size: 12px;
+    color: #777;
+}
+
+/* ============================================================
+   徽章
+   ============================================================ */
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.badge-expired { background: #ff4d4f; color: #fff; }
+.badge-urgent { background: #fff3cd; color: #856404; }
+.badge-warning { background: #d4edda; color: #155724; }
+.badge-safe { background: #cce5ff; color: #004085; }
+.badge-unknown { background: #e2e3e5; color: #383d41; }
+
+/* ============================================================
+   详情弹窗
+   ============================================================ */
+
+.modal {
+    background: #fff;
+    border-radius: 14px;
+    width: 620px;
+    max-width: 90vw;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 28px 30px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.modal h2 {
+    font-size: 18px;
+    color: #222;
+    margin-bottom: 20px;
+    padding-right: 24px;
+}
+
+.close-modal {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: #aaa;
+    cursor: pointer;
+    line-height: 1;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.close-modal:hover {
+    background: #f0f2f5;
+    color: #333;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 6px 12px;
+    margin-bottom: 16px;
+}
+
+.detail-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #888;
+    padding: 4px 0;
+}
+
+.detail-value {
+    font-size: 13px;
+    color: #333;
+    padding: 4px 0;
+    word-break: break-all;
+}
+
+.detail-section {
+    background: #f8f9fc;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-top: 8px;
+}
+
+.modal-overlay.show {
+    display: flex;
+}
+
+/* 登录弹窗覆盖已有的 .modal-overlay */
 
 .modal-overlay {
     position: fixed;
@@ -239,7 +477,7 @@ body {
     width: 100%;
     height: 100%;
     background: rgba(0, 0, 0, 0.5);
-    display: flex;
+    display: none;
     align-items: center;
     justify-content: center;
     z-index: 1000;
@@ -321,11 +559,98 @@ body {
 }
 
 /* ============================================================
+   图表网格
+   ============================================================ */
+
+.chart-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    padding: 16px;
+}
+
+.chart-box {
+    background: #fff;
+    border-radius: 10px;
+    padding: 16px;
+    border: 1px solid #f0f2f5;
+}
+
+.chart-box h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #444;
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #f0f2f5;
+}
+
+/* 横条图通用样式 */
+
+.bar-row {
+    display: flex;
+    align-items: center;
+    margin: 5px 0;
+    gap: 8px;
+}
+
+.bar-lbl {
+    font-size: 12px;
+    color: #666;
+    min-width: 48px;
+    white-space: nowrap;
+}
+
+.bar-name {
+    font-size: 12px;
+    color: #555;
+    min-width: 120px;
+    max-width: 120px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bar-track {
+    flex: 1;
+    background: #f0f2f5;
+    border-radius: 4px;
+    height: 22px;
+    overflow: hidden;
+}
+
+.bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    transition: width 0.4s ease;
+}
+
+.clr-blue {
+    background: linear-gradient(90deg, #4a9eff, #1a73e8);
+}
+
+/* 无数据提示 */
+
+.no-data {
+    text-align: center;
+    padding: 60px;
+    color: #bbb;
+    font-size: 15px;
+}
+
+/* ============================================================
    响应式
    ============================================================ */
 
 @media (max-width: 800px) {
-    .charts-grid {
+    .chart-grid {
         grid-template-columns: 1fr;
     }
 
@@ -344,12 +669,23 @@ body {
         justify-content: center;
     }
 
-    .chart-container {
-        height: 300px;
+    .toolbar {
+        flex-direction: column;
     }
 
-    .chart-card.full-width .chart-container {
-        height: 350px;
+    .toolbar input {
+        min-width: auto;
+        width: 100%;
+    }
+
+    .modal {
+        width: 95vw;
+        padding: 20px;
+    }
+
+    .detail-grid {
+        grid-template-columns: 1fr;
+        gap: 2px;
     }
 }
 
