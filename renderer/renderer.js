@@ -42,6 +42,18 @@ function badgeHtml(d) {
 
 // ======================== 数据加载 ========================
 async function loadData() {
+  const statusEl = document.getElementById('crawlStatus');
+  const dotEl = document.getElementById('statusDot');
+  const btnRefresh = document.getElementById('btnRefresh');
+  
+  // 保存按钮原始文本并禁用按钮（防止重复点击）
+  const originalBtnText = btnRefresh.textContent;
+  btnRefresh.disabled = true;
+
+  // 更新状态栏
+  dotEl.className = 'status-dot running';
+  statusEl.textContent = '正在刷新数据...';
+
   try {
     const result = await window.electronAPI.getData();
     if (result.success) {
@@ -59,11 +71,33 @@ async function loadData() {
       initFilters();
       renderAll();
       updateMatchInfo();
+
+      // 显示成功信息，3秒后恢复为“就绪”
+      dotEl.className = 'status-dot success';
+      statusEl.textContent = `✅ 数据刷新成功，共 ${DATA.length} 条专利`;
+      setTimeout(() => {
+        if (dotEl.className === 'status-dot success') {
+          dotEl.className = 'status-dot idle';
+          statusEl.textContent = '就绪';
+        }
+      }, 3000);
     } else {
-      console.error('加载数据失败:', result);
+      throw new Error('返回数据格式错误');
     }
   } catch (err) {
     console.error('加载数据异常:', err);
+    dotEl.className = 'status-dot error';
+    statusEl.textContent = `❌ 刷新失败: ${err.message || '未知错误'}`;
+    setTimeout(() => {
+      if (dotEl.className === 'status-dot error') {
+        dotEl.className = 'status-dot idle';
+        statusEl.textContent = '就绪';
+      }
+    }, 4000);
+  } finally {
+    // 恢复刷新按钮
+    btnRefresh.textContent = originalBtnText;
+    btnRefresh.disabled = false;
   }
 }
 
@@ -549,7 +583,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (currentTab === 'chart') renderCharts();
   }, 10000);
 });
-  
+
 // ======================== 全局函数暴露给 HTML 按钮 ========================
 window.handleCrawl = handleCrawl;
 window.handleClean = handleClean;
