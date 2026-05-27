@@ -28,39 +28,66 @@ def setup_file_logging(data_dir):
     logger.info(f"日志文件: {log_file}")
 
 def check_login(page):
-    """检查天眼查登录状态（元素 + cookie）"""
+    """检测天眼查登录状态：优先判断登录/注册按钮是否存在且可见"""
     try:
         page.goto(TIANYAN_URL, wait_until="domcontentloaded", timeout=15000)
         page.wait_for_timeout(3000)
-        has_element = page.evaluate("() => !!document.querySelector('.tyc-nav-user')")
+        
+        # 方法1: 检查“登录/注册”按钮（未登录时一定存在，可能有多个）
+        login_btns = page.locator('span.tyc-nav-user-btn:has-text("登录/注册")')
+        count = login_btns.count()
+        if count > 0:
+            # 取第一个按钮检查可见性
+            if login_btns.first.is_visible():
+                logger.info("[登录检查] 检测到可见的'登录/注册'按钮 → 未登录")
+                return False
+        
+        # 方法2: 检查登录后的用户菜单（只有登录后才出现）
+        user_label = page.locator('span.tyc-nav-user-dropdown-label')
+        if user_label.count() > 0 and user_label.first.is_visible():
+            # 进一步检查是否有实际文本内容（避免空占位）
+            text = user_label.first.text_content().strip()
+            if text and text != "登录/注册":
+                logger.info(f"[登录检查] 检测到用户菜单文本: {text} → 已登录")
+                return True
+        
+        # 兜底: cookie 检测
         cookies = page.context.cookies()
         has_token = any('token' in c['name'].lower() or 'tycid' in c['name'].lower() for c in cookies)
-        logged_in = has_element and has_token
-        logger.info(f"[登录检查] 元素:{has_element} Cookie:{has_token} => {'已登录' if logged_in else '未登录'}")
-        return logged_in
+        if has_token:
+            # 如果 cookie 有 token，再检查一次元素以防止脏数据
+            logger.info("[登录检查] Cookie 有 token，但元素未确认，暂认为未登录")
+            return False
+        return False
     except Exception as e:
         logger.warning(f"[登录检查] 异常: {e}")
         return False
 
 def wait_for_login(page, timeout=LOGIN_TIMEOUT):
-    """等待用户完成登录（轮询检测登录元素）"""
+    """等待用户完成登录：轮询检测登录后特有的用户菜单元素出现且有内容"""
     logger.info("[登录] 请在弹出的浏览器中扫码或输入账号密码登录...")
     start = time.time()
     while time.time() - start < timeout:
         try:
             page.wait_for_timeout(2000)
-            # 检查是否出现用户菜单
-            has_element = page.evaluate("() => !!document.querySelector('.tyc-nav-user')")
-            if has_element:
-                logger.info("[登录] 登录成功")
-                return True
-        except:
+            # 检测登录后特有的 span.tyc-nav-user-dropdown-label 且文本非空
+            user_label = page.locator('span.tyc-nav-user-dropdown-label')
+            if user_label.count() > 0:
+                # 确保元素可见且有实际文本（不是空字符串）
+                if user_label.first.is_visible():
+                    text = user_label.first.text_content().strip()
+                    if text and text != "登录/注册":
+                        logger.info(f"[登录] 检测到用户菜单: {text} → 登录成功")
+                        return True
+        except Exception:
             pass
+        # 每30秒提示一次
         if (time.time() - start) % 30 < 2:
             remaining = int(timeout - (time.time() - start)) // 60
             logger.info(f"[登录] 等待中... 剩余约 {remaining} 分钟")
     logger.warning("[登录] 等待超时")
     return False
+
 
 def export_and_download(page, output_dir):
     """点击导出按钮，监听下载并保存文件"""
