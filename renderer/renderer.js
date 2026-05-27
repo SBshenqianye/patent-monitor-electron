@@ -4,11 +4,11 @@
 let DATA = [];
 let currentFilter = '';
 let currentTab = 'table';
-let pendingLoginName = null;
+let currentLoginName = null;       // 当前正在处理的登录爬虫名称
 
 // 用于跟踪当前进行中的任务消息，以便完成后删除
-let currentCrawlMsg = null;              // “开始一键爬取任务”消息（短暂显示）
-let currentCleaningRunningMsg = null;    // “正在清洗数据...”消息（需要手动删除）
+let currentCrawlMsg = null;
+let currentCleaningRunningMsg = null;
 let currentRefreshMsg = null;
 
 // 跟踪每个爬虫的“正在运行”消息对象
@@ -19,14 +19,13 @@ function addMessage(text, type = 'info', duration = 5000) {
     const container = document.getElementById('messageList');
     if (!container) return null;
 
-    // 获取最大高度（数值，单位px）
-    const maxHeight = 180; // 与 CSS 中的 max-height 一致
+    const maxHeight = 180;
     const oldHeight = Math.min(container.scrollHeight, maxHeight);
     container.style.height = oldHeight + 'px';
 
     const msgDiv = document.createElement('div');
     msgDiv.className = `message-item ${type}`;
-    
+
     const iconMap = {
         info: 'ℹ️',
         success: '✅',
@@ -35,44 +34,40 @@ function addMessage(text, type = 'info', duration = 5000) {
     };
     const icon = iconMap[type] || '📢';
     const timeStr = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    
+
     msgDiv.innerHTML = `
         <div class="message-icon">${icon}</div>
         <div class="message-text">${escapeHtml(text)}</div>
         <div class="message-time">${timeStr}</div>
         <button class="message-close" title="关闭">✖</button>
     `;
-    
+
     const closeBtn = msgDiv.querySelector('.message-close');
     closeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         removeMessage(msgDiv);
     });
-    
+
     container.appendChild(msgDiv);
-    // 滚动到底部（新消息可见）
     container.scrollTop = container.scrollHeight;
-    
-    // 强制重绘
     container.offsetHeight;
-    // 新高度：不超过 maxHeight
     let newHeight = container.scrollHeight;
     if (newHeight > maxHeight) newHeight = maxHeight;
     container.style.height = newHeight + 'px';
-    
+
     const onTransitionEnd = () => {
         container.style.height = '';
         container.removeEventListener('transitionend', onTransitionEnd);
     };
     container.addEventListener('transitionend', onTransitionEnd);
-    
+
     if (duration > 0) {
         const timer = setTimeout(() => {
             removeMessage(msgDiv);
         }, duration);
         msgDiv._autoTimer = timer;
     }
-    
+
     updateTopStatusFromMessages();
     return msgDiv;
 }
@@ -92,24 +87,22 @@ function removeMessage(msgDiv) {
             clearTimeout(msgDiv._autoTimer);
             msgDiv._autoTimer = null;
         }
-        
-        // 移除前，记录当前可见高度（受限）
+
         const maxHeight = 180;
         const oldHeight = Math.min(container.scrollHeight, maxHeight);
         container.style.height = oldHeight + 'px';
-        
+
         msgDiv.classList.add('removing');
-        
+
         const onTransitionEnd = () => {
             msgDiv.removeEventListener('transitionend', onTransitionEnd);
             if (msgDiv.parentNode) msgDiv.remove();
-            
-            // 重新计算新高度
+
             container.offsetHeight;
             let newHeight = container.scrollHeight;
             if (newHeight > maxHeight) newHeight = maxHeight;
             container.style.height = newHeight + 'px';
-            
+
             const onParentTransitionEnd = () => {
                 container.style.height = '';
                 container.removeEventListener('transitionend', onParentTransitionEnd);
@@ -124,12 +117,11 @@ function removeMessage(msgDiv) {
             }
         };
         msgDiv.addEventListener('transitionend', onTransitionEnd);
-        
+
         setTimeout(() => {
             if (msgDiv.parentNode) {
                 msgDiv.removeEventListener('transitionend', onTransitionEnd);
                 msgDiv.remove();
-                // 同样需要处理高度
                 container.offsetHeight;
                 let newHeight = container.scrollHeight;
                 if (newHeight > maxHeight) newHeight = maxHeight;
@@ -149,16 +141,15 @@ function clearAllMessages() {
     if (!container) return;
     const messages = Array.from(container.children);
     if (messages.length === 0) return;
-    
+
     const maxHeight = 180;
     const oldHeight = Math.min(container.scrollHeight, maxHeight);
     container.style.height = oldHeight + 'px';
-    
+
     let remaining = messages.length;
     const onOneRemoved = () => {
         remaining--;
         if (remaining === 0) {
-            // 所有消息都移除了，最终高度为0
             container.offsetHeight;
             container.style.height = '0px';
             setTimeout(() => {
@@ -167,7 +158,7 @@ function clearAllMessages() {
             }, 250);
         }
     };
-    
+
     messages.forEach(msg => {
         if (msg._autoTimer) clearTimeout(msg._autoTimer);
         msg.classList.add('removing');
@@ -179,7 +170,7 @@ function clearAllMessages() {
         msg.addEventListener('transitionend', onEnd);
         setTimeout(onEnd, 300);
     });
-    
+
     currentRefreshMsg = null;
     currentCrawlMsg = null;
     currentCleaningRunningMsg = null;
@@ -211,17 +202,17 @@ function updateTopStatusFromMessages() {
     if (!container || !statusEl || !dotEl) return;
 
     const messages = Array.from(container.children);
-    
+
     let selectedMsg = null;
     let selectedType = null;
-    
+
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         const type = msg.classList.contains('error') ? 'error' :
                      msg.classList.contains('warning') ? 'warning' :
                      msg.classList.contains('info') ? 'info' : 'success';
         const text = msg.querySelector('.message-text')?.innerText || '';
-        
+
         if (type === 'error') {
             selectedMsg = text;
             selectedType = 'error';
@@ -242,7 +233,7 @@ function updateTopStatusFromMessages() {
             }
         }
     }
-    
+
     if (selectedMsg) {
         statusEl.textContent = selectedMsg;
         switch (selectedType) {
@@ -643,13 +634,13 @@ function handleCrawl() {
   const btn = document.getElementById('btnCrawl');
   btn.disabled = true;
   btn.textContent = '⏳ 爬取中...';
-  
+
   if (currentCrawlMsg) {
     removeMessage(currentCrawlMsg);
     currentCrawlMsg = null;
   }
   currentCrawlMsg = addMessage('开始一键爬取任务', 'info', 2000);
-  
+
   window.electronAPI.runAllCrawlers().catch(err => {
     if (currentCrawlMsg) {
       removeMessage(currentCrawlMsg);
@@ -665,12 +656,10 @@ function handleClean() {
   const btn = document.getElementById('btnClean');
   btn.disabled = true;
   btn.textContent = '⏳ 清洗中...';
-  
+
   addMessage('开始一键清洗任务', 'info', 1000);
-  
-  window.electronAPI.runCleaning().then(() => {
-    // 清洗成功会在 onCleaningStatus 的 completed 里处理
-  }).catch(err => {
+
+  window.electronAPI.runCleaning().catch(err => {
     if (currentCleaningRunningMsg) {
       removeMessage(currentCleaningRunningMsg);
       currentCleaningRunningMsg = null;
@@ -683,40 +672,50 @@ function handleClean() {
 
 // ======================== 登录弹窗 ========================
 function showLoginModal(source) {
-  pendingLoginName = source;
+  // 不再需要 pendingLoginName，由 currentLoginName 控制
   document.getElementById('loginMessage').textContent = `爬虫「${source}」需要登录相关网站才能使用。`;
   document.getElementById('loginModal').style.display = 'flex';
 }
 
 function closeLoginModal() {
   document.getElementById('loginModal').style.display = 'none';
-  pendingLoginName = null;
 }
 
 function startLogin() {
-  if (pendingLoginName) {
-    window.electronAPI.guideLogin(pendingLoginName).catch(err => {
-      console.error('登录引导失败:', err);
+  if (currentLoginName) {
+    window.electronAPI.guideLogin(currentLoginName).catch(err => {
       addMessage(`登录引导失败: ${err.message}`, 'error', 0);
     });
   }
   closeLoginModal();
 }
 
+function cancelLogin() {
+  if (currentLoginName) {
+    window.electronAPI.cancelLogin(currentLoginName);
+  }
+  closeLoginModal();
+  currentLoginName = null;
+}
+
 // ======================== 事件监听（来自主进程） ========================
 function setupEventListeners() {
   window.electronAPI.onCrawlerStatus(async (status) => {
     console.log('爬虫状态:', status);
-    
+
     if (status.name !== 'all') {
-      if (status.status === 'running') {
+      if (status.status === 'waiting-login') {
+        // 排队等待登录
+        addMessage(status.message, 'info', 0);
+      }
+      else if (status.status === 'running') {
         if (runningCrawlerMessages.has(status.name)) {
           await removeMessage(runningCrawlerMessages.get(status.name));
           runningCrawlerMessages.delete(status.name);
         }
         const msg = addMessage(status.message, 'info', 0);
         runningCrawlerMessages.set(status.name, msg);
-      } 
+      }
       else if (status.status === 'completed') {
         const oldMsg = runningCrawlerMessages.get(status.name);
         if (oldMsg) {
@@ -725,7 +724,7 @@ function setupEventListeners() {
         } else {
           addMessage(`${status.name} 完成`, 'success');
         }
-      } 
+      }
       else if (status.status === 'error') {
         const oldMsg = runningCrawlerMessages.get(status.name);
         if (oldMsg) {
@@ -736,11 +735,9 @@ function setupEventListeners() {
         }
       }
     }
-    
+
     if (status.name === 'all' && status.allDone) {
       addMessage(`✅ 一键爬取完成`, 'success');
-      // 可选：自动开始清洗（取消注释即可）
-      // handleClean();
       loadData();
       document.getElementById('btnCrawl').disabled = false;
       document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
@@ -749,13 +746,13 @@ function setupEventListeners() {
 
   window.electronAPI.onCleaningStatus(async (status) => {
     console.log('清洗状态:', status);
-    
+
     if (status.status === 'running') {
       if (currentCleaningRunningMsg) {
         await removeMessage(currentCleaningRunningMsg);
       }
       currentCleaningRunningMsg = addMessage('正在清洗数据...', 'info', 0);
-    } 
+    }
     else if (status.status === 'completed') {
       if (currentCleaningRunningMsg) {
         await replaceMessage(currentCleaningRunningMsg, '数据清洗完成', 'success');
@@ -766,7 +763,7 @@ function setupEventListeners() {
       loadData();
       document.getElementById('btnClean').disabled = false;
       document.getElementById('btnClean').textContent = '🧹 一键清洗';
-    } 
+    }
     else if (status.status === 'error') {
       if (currentCleaningRunningMsg) {
         await replaceMessage(currentCleaningRunningMsg, `清洗失败: ${status.message}`, 'error', 0);
@@ -782,13 +779,28 @@ function setupEventListeners() {
   window.electronAPI.onLoginRequired((data) => {
     console.log('需要登录:', data);
     addMessage(`爬虫“${data.name}”需要登录，请手动完成登录`, 'warning');
+    currentLoginName = data.name;
     showLoginModal(data.name);
   });
 
   window.electronAPI.onLoginDone((data) => {
     console.log('登录完成:', data);
-    addMessage(`“${data.name}”登录已完成，可以继续爬取`, 'success');
+    addMessage(`“${data.name}”登录已完成`, 'success');
+    closeLoginModal();
+    currentLoginName = null;
     loadData();
+  });
+
+  window.electronAPI.onLoginTimeout((data) => {
+    addMessage(`“${data.name}”登录超时，已自动跳过`, 'error');
+    closeLoginModal();
+    currentLoginName = null;
+  });
+
+  window.electronAPI.onLoginCancelled((data) => {
+    addMessage(`“${data.name}”登录已取消`, 'info');
+    closeLoginModal();
+    currentLoginName = null;
   });
 }
 
@@ -859,3 +871,4 @@ window.loadData = loadData;
 window.showLoginModal = showLoginModal;
 window.closeLoginModal = closeLoginModal;
 window.startLogin = startLogin;
+window.cancelLogin = cancelLogin;

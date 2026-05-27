@@ -13,12 +13,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 登录相关
     checkLogin: (name) => ipcRenderer.invoke('check-login', name),
     guideLogin: (name) => ipcRenderer.invoke('guide-login', name),
+    cancelLogin: (name) => ipcRenderer.invoke('cancel-login', name),
 
     // 获取路径
     getDataDir: () => ipcRenderer.invoke('get-data-dir'),
     getUserDataDir: () => ipcRenderer.invoke('get-user-data-dir'),
 
-    // 事件监听（主进程推送到渲染进程）
+    // 事件监听
     onCrawlerStatus: (callback) => {
         ipcRenderer.on('crawler-status', (event, data) => callback(data));
     },
@@ -30,6 +31,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     onLoginDone: (callback) => {
         ipcRenderer.on('login-done', (event, data) => callback(data));
+    },
+    onLoginTimeout: (callback) => {
+        ipcRenderer.on('login-timeout', (event, data) => callback(data));
+    },
+    onLoginCancelled: (callback) => {
+        ipcRenderer.on('login-cancelled', (event, data) => callback(data));
     },
 
     // 移除监听
