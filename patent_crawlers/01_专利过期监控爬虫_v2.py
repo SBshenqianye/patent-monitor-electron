@@ -23,6 +23,20 @@ import json
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
+# ============================ 打包环境 Playwright 路径修复 ============================
+def fix_playwright_path():
+    """修复 PyInstaller 打包后找不到浏览器的问题"""
+    if getattr(sys, 'frozen', False):
+        # 运行在打包后的 exe 中
+        base_path = sys._MEIPASS
+        # 假设打包时浏览器放在 playwright/browsers/ 下
+        browsers_path = os.path.join(base_path, 'playwright', 'browsers')
+        if os.path.exists(browsers_path):
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = browsers_path
+            logging.info(f"[Playwright] 使用内置浏览器: {browsers_path}")
+        else:
+            logging.warning("[Playwright] 未找到内置浏览器，将尝试使用系统缓存")
+
 # ============================ 常量 ============================
 URL = "http://epub.cnipa.gov.cn/Index"
 DEFAULT_KEYWORDS = ["内江供电公司"]
@@ -258,6 +272,7 @@ def wait_for_results(page, timeout_seconds=60):
 
 
 def main():
+    fix_playwright_path()   # <--- 添加这行
     parser = argparse.ArgumentParser(description='中国专利公布公告爬虫')
     parser.add_argument('--data-dir', required=True, help='用户数据根目录')
     parser.add_argument('--action', required=True, choices=['check', 'crawl'], help='操作类型')

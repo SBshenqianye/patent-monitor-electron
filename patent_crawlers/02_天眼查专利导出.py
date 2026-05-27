@@ -10,6 +10,23 @@ from pathlib import Path
 from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
+
+# ============================ 打包环境 Playwright 路径修复 ============================
+def fix_playwright_path():
+    """修复 PyInstaller 打包后找不到浏览器的问题"""
+    if getattr(sys, 'frozen', False):
+        # 运行在打包后的 exe 中
+        base_path = sys._MEIPASS
+        # 假设打包时浏览器放在 playwright/browsers/ 下
+        browsers_path = os.path.join(base_path, 'playwright', 'browsers')
+        if os.path.exists(browsers_path):
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = browsers_path
+            logging.info(f"[Playwright] 使用内置浏览器: {browsers_path}")
+        else:
+            logging.warning("[Playwright] 未找到内置浏览器，将尝试使用系统缓存")
+
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
@@ -132,6 +149,7 @@ def do_crawl(page, output_dir):
     return success, file
 
 def main():
+    fix_playwright_path()   # <--- 添加这行
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir', required=True)
     parser.add_argument('--action', required=True, choices=['check', 'crawl'])
