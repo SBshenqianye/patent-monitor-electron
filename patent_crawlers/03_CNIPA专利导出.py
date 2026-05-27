@@ -1,191 +1,232 @@
-# -*- coding: utf-8 -*-
+# 03_CNIPA专利导出.py
 """
-CNIPA专利检索及分析网 - 爬虫 (Electron版)
-支持命令行参数: --data-dir <path> --action <check|login|crawl>
-使用 Playwright 持久化浏览器上下文
+CNIPA专利检索及分析网 - 智能下载捕获脚本（被动等待版）
+- 打开浏览器后仅首次导航，之后所有检测均不打断用户操作
+- 通过Cookie+当前页面DOM静默检测登录状态
+- 用户登录后手动搜索、下载，脚本自动捕获下载文件
 """
-
 import os, sys, json, time, logging, argparse
 from pathlib import Path
 from datetime import datetime
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-from playwright.sync_api import sync_playwright
-
-# ---------- 日志 ----------
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
-DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-
-# ---------- 全局变量 ----------
-DOWNLOAD_COMPLETED = False
-DATA_DIR = None  # 由 --data-dir 指定
-USER_DATA_DIR = None  # 持久化上下文目录
-COOKIE_FILE = None
-LOG_FILE = None
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
+logger = logging.getLogger(__name__)
 
 CNIPA_URL = "https://pss-system.cponline.cnipa.gov.cn"
-LOGIN_CHECK_URL = f"{CNIPA_URL}/api/online/user/loginUserInfo"
-DOWNLOAD_WAIT = 30  # 等待下载的最大秒数
+# 注意: main.js 有 5 分钟总超时 (CRAWLER_TIMEOUT=300000ms)
+# 此处两个超时之和需小于 300 秒，预留启动/导航时间
+MANUAL_TIMEOUT = 150          # 等待用户手动下载 2.5 分钟
+LOGIN_WAIT_TIMEOUT = 120      # 登录等待 2 分钟
+
+# 登录后CNIPA设置的常见session cookie名称
+LOGIN_COOKIE_PATTERNS = ["session", "token", "auth", "castgc", "iPlanetDirectoryPro",
+                         "tgTCookie", "rememberMe", "cnipa_"]
 
 
-def setup_logging():
-    global LOG_FILE
-    os.makedirs(DATA_DIR, exist_ok=True)
-    LOG_FILE = os.path.join(DATA_DIR, f"cnipa_crawl_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-    logging.basicConfig(
-        level=logging.INFO,
-        format=LOG_FORMAT,
-        datefmt=DATE_FORMAT,
-        handlers=[
-            logging.FileHandler(LOG_FILE, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout),
-        ]
-    )
+def setup_file_logging(data_dir):
+    log_dir = Path(data_dir) / "log" / "专利检索及分析网"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"cnipa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    fh = logging.FileHandler(log_file, encoding='utf-8')
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logging.getLogger().addHandler(fh)
+    logger.info(f"日志文件: {log_file}")
 
 
-# ========== 下载监听 ==========
-def handle_download(download):
-    global DOWNLOAD_COMPLETED
-    DOWNLOAD_COMPLETED = True
-    dest = os.path.join(DATA_DIR, download.suggested_filename)
-    download.save_as(dest)
-    logging.info(f"[下载] 文件已保存: {dest}")
-
-
-# ========== 检查登录状态 ==========
 def check_login(page):
-    """检查是否已登录，返回 True/False"""
+    """
+    静默检测登录状态 - 不导航、不刷新页面。
+    优先级:
+      1. Cookie检测（最快，零副作用）
+      2. 当前页面DOM检测（不导航，仅在当前URL属于CNIPA域时执行）
+    """
+    # ---------- 方法1: Cookie检测 ----------
     try:
-        page.goto(LOGIN_CHECK_URL, wait_until="domcontentloaded", timeout=15000)
-        resp = page.evaluate("() => document.body.innerText")
-        data = json.loads(resp)
-        logged_in = data.get("success", False) and data.get("data") is not None
-        logging.info(f"[登录检查] 登录状态: {'已登录' if logged_in else '未登录'}")
-        return logged_in
+        cookies = page.context.cookies()
+        # 只关心 CNIPA 域下的 cookie
+        cnipa_cookies = [c for c in cookies if "cponline.cnipa.gov.cn" in c.get("domain", "")]
+        for c in cnipa_cookies:
+            name_lower = c["name"].lower()
+            if any(pattern in name_lower for pattern in LOGIN_COOKIE_PATTERNS):
+                if c.get("value", "").strip():
+                    logger.info(f"[登录检测-Cookie] 检测到登录cookie: {c['name']}")
+                    return True
+        logger.debug(f"[登录检测-Cookie] CNIPA cookie数量: {len(cnipa_cookies)}, 名称: {[c['name'] for c in cnipa_cookies]}")
     except Exception as e:
-        logging.warning(f"[登录检查] 检查失败: {e}")
-        return False
+        logger.debug(f"[登录检测-Cookie] 异常: {e}")
 
+    # ---------- 方法2: 当前页面DOM检测（不导航） ----------
+    try:
+        current_url = page.url
+        # 只在CNIPA域下检测，避免跨域错误
+        if "cponline.cnipa.gov.cn" not in current_url:
+            logger.debug(f"[登录检测-DOM] 当前URL不在CNIPA域: {current_url}")
+            return False
 
-# ========== 登录引导 ==========
-def do_login(page):
-    """打开登录页面，等待用户手动完成登录"""
-    logging.info("[登录] 请在打开的浏览器窗口中扫码或账号密码登录...")
-    page.goto(CNIPA_URL, wait_until="domcontentloaded", timeout=30000)
-    
-    # 等待用户完成登录（检测到登录成功）
-    max_wait = 600  # 最多等待10分钟
-    for i in range(max_wait):
-        time.sleep(1)
-        try:
-            page.goto(LOGIN_CHECK_URL, wait_until="domcontentloaded", timeout=5000)
-            resp = page.evaluate("() => document.body.innerText")
-            data = json.loads(resp)
-            if data.get("success", False) and data.get("data") is not None:
-                logging.info("[登录] 登录成功！")
-                # 保存Cookie状态
-                context = page.context
-                context.storage_state(path=COOKIE_FILE)
-                return True
-        except Exception:
-            pass
-        if i % 30 == 0:
-            logging.info(f"[登录] 等待登录中... {(max_wait - i) // 60}分钟")
-    logging.warning("[登录] 登录超时")
+        body_text = page.evaluate("document.body?.innerText || ''")
+        # 登录后的特征文本（优先用更稳定的关键词）
+        logged_in_keywords = ['退出登录', '个人中心', '批量下载库', '我的专利']
+        login_page_keywords = ['登录', '注册']
+
+        has_logged_in = any(kw in body_text for kw in logged_in_keywords)
+        has_login_form = any(kw in body_text for kw in login_page_keywords)
+
+        if has_logged_in and not has_login_form:
+            logger.info("[登录检测-DOM] 检测到用户已登录")
+            return True
+
+        logger.debug(f"[登录检测-DOM] 当前URL={current_url}, logged_in_kw={has_logged_in}, login_form_kw={has_login_form}")
+    except Exception as e:
+        logger.debug(f"[登录检测-DOM] 异常: {e}")
+
     return False
 
 
-# ========== 爬取主逻辑 ==========
-def do_crawl(page):
-    """执行爬取流程"""
-    global DOWNLOAD_COMPLETED
-    DOWNLOAD_COMPLETED = False
-
+def initial_navigate(page):
+    """首次导航到CNIPA首页，只在启动时调用一次"""
     try:
-        # ---------- 1. 访问专利检索页面 ----------
-        logging.info("[步骤1] 打开专利检索页面...")
-        search_url = f"{CNIPA_URL}/login/search"
-        page.goto(search_url, wait_until="networkidle", timeout=30000)
-
-        # 页面上的专利检索逻辑 - 这里需要根据实际页面结构调整
-        # 以下为示例逻辑，实际使用时需要根据页面 DOM 结构调整
-        
-        # 搜索框输入
-        # page.fill('input[placeholder*="申请号"]', search_keyword)
-        # page.click('button:has-text("搜索")')
-        # page.wait_for_selector('.table-container', timeout=10000)
-        
-        # 导出按钮
-        # page.click('button:has-text("导出")')
-        
-        # ---------- 2. 等待下载 ----------
-        logging.info(f"[步骤2] 等待下载（最长{DOWNLOAD_WAIT}秒）...")
-        wait_until = time.time() + DOWNLOAD_WAIT
-        while time.time() < wait_until:
-            if DOWNLOAD_COMPLETED:
-                break
-            time.sleep(1)
-
-        # ---------- 3. 结果 ----------
-        if DOWNLOAD_COMPLETED:
-            logging.info("[结果] 导出成功！✓")
-        else:
-            logging.info("[结果] 导出完成（可能未触发下载，请检查页面）")
-        
-        logging.info(f"[结果] 数据目录: {DATA_DIR}")
+        logger.info(f"[导航] 正在打开 CNIPA: {CNIPA_URL}")
+        page.goto(CNIPA_URL, wait_until="load", timeout=30000)
+        page.wait_for_timeout(5000)
+        logger.info(f"[导航] 当前页面: {page.url}")
         return True
-    
     except Exception as e:
-        logging.error(f"[错误] 爬取失败: {e}")
+        logger.warning(f"[导航] 异常: {e}")
         return False
 
 
-# ========== 主入口 ==========
+def wait_for_login(page, timeout=LOGIN_WAIT_TIMEOUT):
+    """静默等待用户登录 - 不导航、不刷新页面"""
+    logger.info("[登录] 请在弹出的浏览器中扫码或输入账号密码登录...")
+    logger.info("[登录] 脚本将静默检测登录状态，不会打断您的操作")
+    start = time.time()
+    last_log_time = 0
+    while time.time() - start < timeout:
+        time.sleep(2)
+        try:
+            if check_login(page):
+                return True
+        except Exception as e:
+            logger.debug(f"[登录检测] 轮询异常: {e}")
+        elapsed = time.time() - start
+        if elapsed - last_log_time >= 30:
+            remaining = int(timeout - elapsed) // 60
+            logger.info(f"[登录] 等待登录中... 剩余约 {remaining} 分钟")
+            last_log_time = elapsed
+    logger.warning("[登录] 登录超时")
+    return False
+
+
+def wait_for_manual_download(page, output_dir, timeout=MANUAL_TIMEOUT):
+    """等待用户手动操作并捕获下载文件"""
+    print("\n" + "=" * 60)
+    print("📋 已检测到登录成功！请手动完成以下操作：")
+    print("  1️⃣  在搜索框中输入专利号或申请人，点击搜索")
+    print("  2️⃣  在搜索结果中勾选需要导出的专利")
+    print("  3️⃣  点击「加入批量下载库」→ 选择「追加到默认库」")
+    print("  4️⃣  点击右上角用户菜单 → 「批量下载库」")
+    print("  5️⃣  在批量下载库页面点击「下载」")
+    print("  6️⃣  全选字段标签（申请人、摘要等）")
+    print("  7️⃣  输入验证码，点击确认下载")
+    print("=" * 60)
+    print(f"脚本将自动捕获下载文件... 最长等待时间: {timeout // 60} 分钟\n")
+
+    download_occurred = False
+    download_file = None
+
+    def handle_download(download):
+        nonlocal download_occurred, download_file
+        suggested = download.suggested_filename
+        dest = os.path.join(output_dir, suggested)
+        download.save_as(dest)
+        logger.info(f"[下载] 文件已保存: {dest}")
+        download_file = dest
+        download_occurred = True
+
+    page.on("download", handle_download)
+
+    start = time.time()
+    last_log_time = 0
+    while time.time() - start < timeout:
+        if download_occurred:
+            break
+        time.sleep(1)
+        elapsed = time.time() - start
+        if elapsed - last_log_time >= 30:
+            remaining = int(timeout - elapsed) // 60
+            logger.info(f"[等待下载] 剩余约 {remaining} 分钟...")
+            last_log_time = elapsed
+
+    page.remove_listener("download", handle_download)
+    return download_file if download_occurred else None
+
+
 def main():
-    parser = argparse.ArgumentParser(description='CNIPA专利检索爬虫')
-    parser.add_argument('--data-dir', required=True, help='用户数据目录')
-    parser.add_argument('--action', required=True, choices=['check', 'login', 'crawl'], help='执行动作')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data-dir', required=True)
+    parser.add_argument('--action', required=True, choices=['check', 'crawl'])
     args = parser.parse_args()
+    data_dir = Path(args.data_dir)
+    setup_file_logging(data_dir)
+    output_dir = data_dir / "temp_data" / "专利检索及分析网"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    USER_DATA_DIR = data_dir / "cnipa_context"
+    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    global DATA_DIR, USER_DATA_DIR, COOKIE_FILE
-    DATA_DIR = args.data_dir
-    USER_DATA_DIR = os.path.join(DATA_DIR, "cnipa_context")
-    COOKIE_FILE = os.path.join(USER_DATA_DIR, "storage_state.json")
+    if args.action == 'check':
+        # 快速检查登录状态 - 无头模式，仅查cookie
+        with sync_playwright() as p:
+            browser = p.chromium.launch_persistent_context(
+                user_data_dir=str(USER_DATA_DIR),
+                headless=True,
+                args=['--disable-blink-features=AutomationControlled']
+            )
+            page = browser.pages[0] if browser.pages else browser.new_page()
+            # check 动作仅用 cookie 检测，不导航加载页面
+            logged_in = check_login(page)
+            print(json.dumps({"loggedIn": logged_in}))
+            browser.close()
+        return
 
-    os.makedirs(USER_DATA_DIR, exist_ok=True)
-    setup_logging()
-
-    logging.info(f"[启动] CNIPA爬虫 (数据目录: {DATA_DIR}, 动作: {args.action})")
-
+    # crawl 动作
+    logger.info("[启动] 正在打开 CNIPA 浏览器窗口...")
     with sync_playwright() as p:
         browser = p.chromium.launch_persistent_context(
-            user_data_dir=USER_DATA_DIR,
-            headless=(args.action != 'login'),  # 登录时显示浏览器
+            user_data_dir=str(USER_DATA_DIR),
+            headless=False,
             no_viewport=True,
-            args=['--start-maximized'],
+            args=['--start-maximized', '--disable-blink-features=AutomationControlled'],
             locale='zh-CN',
+            accept_downloads=True,
         )
         page = browser.pages[0] if browser.pages else browser.new_page()
-        page.on("download", handle_download)
 
-        if args.action == 'check':
-            result = check_login(page)
-            print(json.dumps({"loggedIn": result}))
-        
-        elif args.action == 'login':
-            result = do_login(page)
-            print(json.dumps({"loggedIn": result}))
-            input("\n按 Enter 键关闭浏览器...")
-        
-        elif args.action == 'crawl':
-            # 先检查登录
-            logged_in = check_login(page)
-            if not logged_in:
-                logging.warning("[警告] 尚未登录，请先执行 login 动作")
-                print(json.dumps({"success": False, "error": "not_logged_in"}))
-            else:
-                success = do_crawl(page)
-                print(json.dumps({"success": success}))
-        
+        # 1. 首次导航到CNIPA首页（仅此一次）
+        initial_navigate(page)
+
+        # 2. 静默等待用户登录（不导航、不刷新、不打断用户操作）
+        logged_in = wait_for_login(page)
+        if not logged_in:
+            print(json.dumps({"success": False, "error": "登录超时"}))
+            browser.close()
+            return
+
+        # 3. 登录成功，等待用户手动搜索、导出、下载
+        download_file = wait_for_manual_download(page, str(output_dir))
+        if download_file:
+            print(json.dumps({
+                "success": True,
+                "crawler": "专利检索分析网",
+                "file": download_file,
+                "timestamp": datetime.now().isoformat()
+            }, ensure_ascii=False))
+        else:
+            print(json.dumps({"success": False, "error": "未检测到下载文件"}))
+
+        logger.info("[结束] 操作完成，3秒后关闭浏览器...")
+        time.sleep(3)
         browser.close()
 
 
