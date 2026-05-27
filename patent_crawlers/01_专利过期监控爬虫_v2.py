@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # ============================ 常量 ============================
 URL = "http://epub.cnipa.gov.cn/Index"
-DEFAULT_KEYWORDS = ["内江供电公司", "隆昌供电公司"]
+DEFAULT_KEYWORDS = ["内江供电公司"]
 TOTAL_PAGES = 8
 WAIT_TIMEOUT = 90_000
 MAX_RETRIES = 3  # 502 重试次数
@@ -227,7 +227,7 @@ def trigger_search(page, keyword):
             logger.info("已通过 force click 点击搜索按钮")
     except Exception as e:
         logger.error(f"所有搜索触发方式均失败: {e}")
-        
+
 
 def wait_for_results(page, timeout_seconds=60):
     """等待搜索结果显示"""
