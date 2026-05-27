@@ -65,11 +65,9 @@ function runPythonScript(scriptPath, args = []) {
         let stderr = '';
         let killed = false;
 
-        // 超时定时器
         const timer = setTimeout(() => {
             killed = true;
             proc.kill('SIGTERM');
-            // 若 5 秒后仍未退出，强制杀死
             setTimeout(() => {
                 if (proc.exitCode === null) proc.kill('SIGKILL');
             }, 5000);
@@ -106,28 +104,6 @@ function runPythonScript(scriptPath, args = []) {
     });
 }
 
-// 检查指定爬虫的登录状态（通过执行 python script --action check）
-async function checkLoginStatus(name, scriptName) {
-    const scriptPath = getScriptPath(scriptName);
-    if (!fs.existsSync(scriptPath)) {
-        console.error(`[checkLogin] 脚本不存在: ${scriptPath}`);
-        return false;
-    }
-    try {
-        const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'check']);
-        // 解析 stdout 最后一行 JSON（注意日志干扰，假设 JSON 在最后一行）
-        const lines = result.stdout.trim().split('\n');
-        const lastLine = lines[lines.length - 1].trim();
-        if (lastLine.startsWith('{')) {
-            const data = JSON.parse(lastLine);
-            return data.loggedIn === true;
-        }
-    } catch (err) {
-        console.error(`[checkLogin] 执行 check 失败:`, err.message);
-    }
-    return false;
-}
-
 function sendToRenderer(channel, data) {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(channel, data);
@@ -157,7 +133,7 @@ function processLoginQueue() {
         }
     }, LOGIN_TIMEOUT);
 
-    const handler = (eventName) => {
+    const handler = () => {
         clearTimeout(timer);
         loginEvents.removeAllListeners(`login-done-${name}`);
         loginEvents.removeAllListeners(`login-cancel-${name}`);
@@ -166,8 +142,8 @@ function processLoginQueue() {
         processLoginQueue();
     };
 
-    loginEvents.once(`login-done-${name}`, () => handler('login-done'));
-    loginEvents.once(`login-cancel-${name}`, () => handler('login-cancel'));
+    loginEvents.once(`login-done-${name}`, handler);
+    loginEvents.once(`login-cancel-${name}`, handler);
 
     sendToRenderer('login-required', {
         name,
@@ -179,7 +155,7 @@ function processLoginQueue() {
 // ================ 检查爬虫输出文件 ================
 function hasNewFilesInDataDir(startTime) {
     function scanDir(dir, depth = 0) {
-        if (depth > 2) return false; // 只检查两层子目录
+        if (depth > 2) return false;
         try {
             const entries = fs.readdirSync(dir, { withFileTypes: true });
             for (const entry of entries) {
@@ -194,9 +170,7 @@ function hasNewFilesInDataDir(startTime) {
                     }
                 }
             }
-        } catch (e) {
-            // 忽略权限错误等
-        }
+        } catch (e) {}
         return false;
     }
     return scanDir(dataDir);
@@ -211,32 +185,49 @@ async function runCrawler(name, scriptName, requiresLogin) {
         return { success: false, error: `脚本不存在: ${scriptPath}` };
     }
 
-    // 需要登录的爬虫：先检查登录状态
     if (requiresLogin) {
-        sendToRenderer('crawler-status', { name, status: 'checking-login', message: `正在检查登录状态...` });
-        const loggedIn = await checkLoginStatus(name, scriptName);
-        if (loggedIn) {
-            sendToRenderer('crawler-status', { name, status: 'login-ok', message: `${name} 已登录，继续爬取` });
-        } else {
-            sendToRenderer('crawler-status', { name, status: 'waiting-login', message: `正在排队等待登录...` });
-            await requestLogin(name);  // 进入登录队列，等待用户完成登录
-            // 登录完成后再次确认状态（可能用户登录失败了？这里简单放行，由 crawl 动作内部处理）
-        }
+        // 直接进入登录队列，用户确认后放行，实际登录由 crawl 脚本内部处理
+        sendToRenderer('crawler-status', { name, status: 'waiting-login', message: `正在排队等待登录...` });
+        await requestLogin(name);
     }
 
     sendToRenderer('crawler-status', { name, status: 'running', message: `正在运行 ${name}...` });
 
+    const startTime = Date.now();
     try {
         const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'crawl']);
-        // ... 原有成功/失败处理 ...
+        
+        // 解析脚本输出，确认是否成功
+        const lines = result.stdout.trim().split('\n');
+        const lastLine = lines[lines.length - 1].trim();
+        let scriptSuccess = false;
+        if (lastLine.startsWith('{')) {
+            try {
+                const data = JSON.parse(lastLine);
+                if (data.success) {
+                    scriptSuccess = true;
+                }
+            } catch (parseErr) {
+                console.error('[runCrawler] JSON 解析失败:', parseErr);
+            }
+        }
+
+        // 如果脚本没有返回成功，且没有生成新文件，则视为失败
+        if (!scriptSuccess && !hasNewFilesInDataDir(startTime)) {
+            throw new Error('爬虫运行完成但未生成任何输出文件');
+        }
+
+        sendToRenderer('crawler-status', { name, status: 'completed', message: `${name} 完成` });
+        return { success: true, output: result.stdout };
     } catch (err) {
-        // ... 错误处理 ...
+        sendToRenderer('crawler-status', { name, status: 'error', message: `${name} 失败: ${err.message}` });
+        return { success: false, error: err.message };
     }
 }
 
 async function runAllCrawlers() {
     const crawlerScripts = [
-        // { name: '爬虫A-专利公告', script: '01_专利过期监控爬虫_v2.py', requiresLogin: false },
+        { name: '爬虫A-专利公告', script: '01_专利过期监控爬虫_v2.py', requiresLogin: false },
         { name: '爬虫B-天眼查', script: '02_天眼查专利导出.py', requiresLogin: true },
         // { name: '爬虫C-CNIPA', script: '03_CNIPA专利导出.py', requiresLogin: true },
     ];
@@ -248,8 +239,8 @@ async function runAllCrawlers() {
     const results = await Promise.allSettled(promises);
     const finalResults = results.map((r, i) => ({
         name: crawlerScripts[i].name,
-        status: r.status === 'fulfilled' ? (r.value.success ? 'completed' : 'error') : 'error',
-        message: r.status === 'fulfilled' ? (r.value.success ? '完成' : r.value.error) : '进程异常',
+        status: r.status === 'fulfilled' ? (r.value?.success ? 'completed' : 'error') : 'error',
+        message: r.status === 'fulfilled' ? (r.value?.success ? '完成' : (r.value?.error || '未知错误')) : '进程异常',
     }));
 
     sendToRenderer('crawler-status', { name: 'all', status: 'completed', message: '一键爬取完成', allDone: true });
@@ -330,43 +321,11 @@ function setupIPC() {
 
     ipcMain.handle('check-login', async (event, name) => ({ loggedIn: false }));
 
+    // guide-login 直接放行队列，实际登录由 crawl 动作内部完成
     ipcMain.handle('guide-login', async (event, name) => {
-        const scriptMap = {
-            '爬虫B-天眼查': '02_天眼查专利导出.py',
-            '爬虫C-CNIPA': '03_CNIPA专利导出.py',
-        };
-        const scriptName = scriptMap[name];
-        if (!scriptName) return { success: false, error: '未知爬虫' };
-
-        const scriptPath = getScriptPath(scriptName);
-        if (!fs.existsSync(scriptPath)) {
-            return { success: false, error: `脚本不存在: ${scriptPath}` };
-        }
-
-        try {
-            const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'login']);
-            // 解析登录结果
-            const lines = result.stdout.trim().split('\n');
-            const lastLine = lines[lines.length - 1].trim();
-            let loginSuccess = false;
-            if (lastLine.startsWith('{')) {
-                const data = JSON.parse(lastLine);
-                loginSuccess = data.loggedIn === true;
-            }
-            if (loginSuccess) {
-                loginEvents.emit(`login-done-${name}`);
-                sendToRenderer('login-done', { name });
-            } else {
-                // 登录失败也放行，避免永久阻塞（但爬虫会因未登录报错）
-                loginEvents.emit(`login-cancel-${name}`);
-                sendToRenderer('login-failed', { name });
-            }
-            return { success: loginSuccess };
-        } catch (err) {
-            loginEvents.emit(`login-cancel-${name}`);
-            sendToRenderer('login-failed', { name });
-            return { success: false, error: err.message };
-        }
+        loginEvents.emit(`login-done-${name}`);
+        sendToRenderer('login-done', { name });
+        return { success: true };
     });
 
     ipcMain.handle('cancel-login', async (event, name) => {
