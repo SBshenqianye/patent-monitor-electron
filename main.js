@@ -171,9 +171,9 @@ async function runCrawler(name, scriptName, requiresLogin) {
 // ========== 一键爬取 ==========
 async function runAllCrawlers() {
     const crawlerScripts = [
-        // { name: '爬虫A-专利公告', script: '01_专利过期监控爬虫_v2.py', requiresLogin: false },
+        { name: '爬虫A-专利公告', script: '01_专利过期监控爬虫_v2.py', requiresLogin: false },
         { name: '爬虫B-天眼查', script: '02_天眼查专利导出.py', requiresLogin: true },
-        // { name: '爬虫C-CNIPA', script: '03_CNIPA专利导出.py', requiresLogin: true },
+        { name: '爬虫C-CNIPA', script: '03_CNIPA专利导出.py', requiresLogin: true },
     ];
 
     const promises = crawlerScripts.map(c => runCrawler(c.name, c.script, c.requiresLogin));
