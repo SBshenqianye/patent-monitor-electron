@@ -9,9 +9,9 @@ let dataDir = null;
 let scriptsDir = null;
 
 const childProcesses = new Map();
-const CRAWLER_TIMEOUT = 5 * 60 * 1000;    // 5分钟
+const CRAWLER_TIMEOUT = 5 * 60 * 1000;    // 5 分钟
 
-// 登录互斥锁
+// 登录互斥锁：同一时间只允许一个需要登录的爬虫运行
 let loginSlotBusy = false;
 const loginWaitQueue = [];
 
@@ -34,7 +34,7 @@ function releaseLoginSlot(name) {
     if (loginWaitQueue.length > 0) {
         const next = loginWaitQueue.shift();
         console.log(`[login-slot] 唤醒队列中的爬虫 "${next.name}"`);
-        next.resolve(); // 保持 busy 状态，直接给下一个
+        next.resolve();
     } else {
         loginSlotBusy = false;
         console.log(`[login-slot] 队列为空，登录槽释放`);
@@ -57,16 +57,21 @@ function getScriptPath(scriptName) {
     return fs.existsSync(exePath) ? exePath : pyPath;
 }
 
-// ========== Python 进程执行 ==========
+// ========== Python 进程执行（带超时） ==========
 function runPythonScript(scriptPath, args = []) {
     return new Promise((resolve, reject) => {
-        if (!fs.existsSync(scriptPath)) return reject(new Error(`脚本不存在: ${scriptPath}`));
+        if (!fs.existsSync(scriptPath)) {
+            return reject(new Error(`脚本不存在: ${scriptPath}`));
+        }
         const isExe = scriptPath.endsWith('.exe');
         const cmd = isExe ? scriptPath : 'python';
         const cmdArgs = isExe ? args : [scriptPath, ...args];
         console.log(`[spawn] ${cmd} ${cmdArgs.join(' ')}`);
 
-        const proc = spawn(cmd, cmdArgs, { stdio: ['pipe', 'pipe', 'pipe'], cwd: path.dirname(scriptPath) });
+        const proc = spawn(cmd, cmdArgs, {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            cwd: path.dirname(scriptPath),
+        });
         const procId = `${Date.now()}_${Math.random()}`;
         childProcesses.set(procId, proc);
 
@@ -97,7 +102,9 @@ function runPythonScript(scriptPath, args = []) {
 }
 
 function sendToRenderer(channel, data) {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, data);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(channel, data);
+    }
 }
 
 // ========== 文件检查 ==========
@@ -107,8 +114,11 @@ function hasNewFilesInDataDir(startTime) {
         try {
             for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
                 const full = path.join(dir, entry.name);
-                if (entry.isDirectory() && scan(full, depth + 1)) return true;
-                if (entry.isFile() && fs.statSync(full).mtimeMs > startTime) return true;
+                if (entry.isDirectory()) {
+                    if (scan(full, depth + 1)) return true;
+                } else if (entry.isFile() && fs.statSync(full).mtimeMs > startTime) {
+                    return true;
+                }
             }
         } catch {}
         return false;
@@ -120,28 +130,33 @@ function hasNewFilesInDataDir(startTime) {
 async function runCrawler(name, scriptName, requiresLogin) {
     const scriptPath = getScriptPath(scriptName);
     if (!fs.existsSync(scriptPath)) {
-        sendToRenderer('crawler-status', { name, status: 'error', message: `脚本不存在` });
-        return { success: false, error: `脚本不存在` };
+        sendToRenderer('crawler-status', { name, status: 'error', message: `脚本不存在: ${scriptPath}` });
+        return { success: false, error: `脚本不存在: ${scriptPath}` };
     }
 
+    // 需要登录则获取互斥锁（排队）
     if (requiresLogin) {
         sendToRenderer('crawler-status', { name, status: 'waiting-login', message: `正在排队等待登录...` });
         await acquireLoginSlot(name);
     }
 
     sendToRenderer('crawler-status', { name, status: 'running', message: `正在运行 ${name}...` });
+
     const startTime = Date.now();
     try {
         const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'crawl']);
-        // 解析输出 JSON 判断成功
+        // 判定成功：脚本输出 JSON 中 success=true 或 有新文件
         const lines = result.stdout.trim().split('\n');
         const lastLine = lines[lines.length - 1].trim();
         let scriptSuccess = false;
         if (lastLine.startsWith('{')) {
-            try { scriptSuccess = JSON.parse(lastLine).success === true; } catch {}
+            try {
+                const data = JSON.parse(lastLine);
+                scriptSuccess = data.success === true;
+            } catch {}
         }
         if (!scriptSuccess && !hasNewFilesInDataDir(startTime)) {
-            throw new Error('爬虫运行完成但未生成输出文件');
+            throw new Error('爬虫运行完成但未生成任何输出文件');
         }
         sendToRenderer('crawler-status', { name, status: 'completed', message: `${name} 完成` });
         return { success: true, output: result.stdout };
@@ -156,9 +171,11 @@ async function runCrawler(name, scriptName, requiresLogin) {
 // ========== 一键爬取 ==========
 async function runAllCrawlers() {
     const crawlerScripts = [
-        // { name: '爬虫A-专利公告', script: '01_专利过期监控爬虫_v2.py', requiresLogin: false },           ## 不要删除
+        // { name: '爬虫A-专利公告', script: '01_专利过期监控爬虫_v2.py', requiresLogin: false },
         { name: '爬虫B-天眼查', script: '02_天眼查专利导出.py', requiresLogin: true },
+        // { name: '爬虫C-CNIPA', script: '03_CNIPA专利导出.py', requiresLogin: true },
     ];
+
     const promises = crawlerScripts.map(c => runCrawler(c.name, c.script, c.requiresLogin));
     const results = await Promise.allSettled(promises);
     const finalResults = results.map((r, i) => ({
@@ -166,7 +183,25 @@ async function runAllCrawlers() {
         status: r.status === 'fulfilled' ? (r.value?.success ? 'completed' : 'error') : 'error',
         message: r.status === 'fulfilled' ? (r.value?.success ? '完成' : (r.value?.error || '未知错误')) : '进程异常',
     }));
-    sendToRenderer('crawler-status', { name: 'all', status: 'completed', message: '一键爬取完成', allDone: true });
+
+    // 统计成功数量，决定是否提示清洗
+    const successCount = finalResults.filter(r => r.status === 'completed').length;
+    if (successCount > 0) {
+        sendToRenderer('crawler-status', {
+            name: 'all',
+            status: 'completed',
+            message: `一键爬取完成（${successCount}/${crawlerScripts.length} 成功），建议运行清洗`,
+            allDone: true,
+            suggestClean: true
+        });
+    } else {
+        sendToRenderer('crawler-status', {
+            name: 'all',
+            status: 'error',
+            message: '一键爬取失败，所有爬虫均未成功',
+            allDone: true
+        });
+    }
     return finalResults;
 }
 
@@ -175,7 +210,7 @@ async function runCleaning() {
     sendToRenderer('cleaning-status', { status: 'running', message: '正在清洗数据...' });
     try {
         const scriptPath = getScriptPath('00_数据清洗融合.py');
-        if (!fs.existsSync(scriptPath)) throw new Error(`脚本不存在`);
+        if (!fs.existsSync(scriptPath)) throw new Error(`脚本不存在: ${scriptPath}`);
         await runPythonScript(scriptPath, ['--data-dir', dataDir]);
         sendToRenderer('cleaning-status', { status: 'completed', message: '数据清洗完成' });
         return { success: true };
@@ -188,13 +223,20 @@ async function runCleaning() {
 function readCleanedJson() {
     const p = path.join(dataDir, 'cleaned_data', '专利数据_清洗融合.json');
     if (!fs.existsSync(p)) return null;
-    try { const raw = JSON.parse(fs.readFileSync(p, 'utf-8')); return Array.isArray(raw) ? { patents: raw } : raw; } catch { return null; }
+    try {
+        const raw = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        return Array.isArray(raw) ? { patents: raw } : raw;
+    } catch { return null; }
 }
 
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1400, height: 900,
-        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+        },
         title: '专利监控看板',
     });
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -202,14 +244,22 @@ function createWindow() {
     mainWindow.on('closed', () => { mainWindow = null; });
 }
 
+// ========== IPC ==========
 function setupIPC() {
-    ipcMain.handle('get-data', () => ({ success: true, data: readCleanedJson() || { patents: [] } }));
-    ipcMain.handle('run-all-crawlers', async () => ({ success: true, results: await runAllCrawlers() }));
+    ipcMain.handle('get-data', () => {
+        const data = readCleanedJson();
+        return { success: true, data: data || { patents: [] } };
+    });
+    ipcMain.handle('run-all-crawlers', async () => {
+        const results = await runAllCrawlers();
+        return { success: true, results };
+    });
     ipcMain.handle('run-cleaning', runCleaning);
     ipcMain.handle('get-data-dir', () => dataDir);
     ipcMain.handle('get-user-data-dir', () => userDataDir);
 }
 
+// ========== 生命周期 ==========
 app.whenReady().then(() => {
     initPaths();
     setupIPC();
@@ -218,6 +268,8 @@ app.whenReady().then(() => {
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('before-quit', () => {
-    for (const proc of childProcesses.values()) try { proc.kill('SIGTERM'); } catch {}
+    for (const proc of childProcesses.values()) {
+        try { proc.kill('SIGTERM'); } catch {}
+    }
     childProcesses.clear();
 });

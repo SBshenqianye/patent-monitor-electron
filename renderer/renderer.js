@@ -450,11 +450,16 @@ function setupEventListeners() {
             }
         }
         if (status.name === 'all' && status.allDone) {
-            addMessage('✅ 一键爬取完成', 'success');
-            loadData();
+            if (status.suggestClean) {
+                addMessage(` ${status.message}`, 'success', 8000);
+                addMessage('💡 请点击「一键清洗」完成数据融合', 'info', 8000);
+            } else {
+                addMessage(`❌ ${status.message}`, 'error', 0);
+            }
+            // 不再自动刷新数据，用户需手动刷新或清洗
             document.getElementById('btnCrawl').disabled = false;
             document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
-        }
+                }
     });
 
     window.electronAPI.onCleaningStatus(async (status) => {
