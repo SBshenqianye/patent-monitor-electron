@@ -48,9 +48,15 @@ function initPaths() {
     userDataDir = app.getPath('userData');
     dataDir = path.join(userDataDir, 'data');
     tempDataDir = path.join(dataDir, 'temp_data');
-    scriptsDir = app.isPackaged
-        ? path.join(process.resourcesPath, 'patent_crawlers')
-        : path.join(__dirname, 'patent_crawlers');
+    
+    if (app.isPackaged) {
+        // 生产环境：extraResources 下的所有 exe 直接位于 resources/extraResources/
+        scriptsDir = path.join(process.resourcesPath, 'extraResources');
+    } else {
+        // 开发环境：python 脚本位于项目根目录的 patent_crawlers/
+        scriptsDir = path.join(__dirname, 'patent_crawlers');
+    }
+    
     fs.mkdirSync(dataDir, { recursive: true });
     fs.mkdirSync(tempDataDir, { recursive: true });
     
@@ -62,9 +68,23 @@ function initPaths() {
 }
 
 function getScriptPath(scriptName) {
-    const pyPath = path.join(scriptsDir, scriptName);
-    const exePath = pyPath.replace(/\.py$/, '.exe');
-    return fs.existsSync(exePath) ? exePath : pyPath;
+    // scriptName 例如 "02_天眼查专利导出.py"
+    if (app.isPackaged) {
+        // 生产环境：将 .py 后缀替换为 .exe，直接位于 scriptsDir 根目录
+        const exeName = scriptName.replace(/\.py$/, '.exe');
+        const exePath = path.join(scriptsDir, exeName);
+        if (fs.existsSync(exePath)) {
+            return exePath;
+        }
+        throw new Error(`打包后的可执行文件不存在: ${exePath}`);
+    } else {
+        // 开发环境：使用原始 .py 文件
+        const pyPath = path.join(scriptsDir, scriptName);
+        if (fs.existsSync(pyPath)) {
+            return pyPath;
+        }
+        throw new Error(`Python 脚本不存在: ${pyPath}`);
+    }
 }
 
 // ========== Python 进程执行（带超时） ==========
