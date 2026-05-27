@@ -482,22 +482,28 @@ function renderTree(node, container, level = 0) {
 }
 
 async function showManualImportDialog() {
+    // 检查是否勾选“不再提示”
     const { ignore } = await window.electronAPI.getManualImportIgnore();
     if (ignore) {
         await window.electronAPI.openTempFolder();
         return;
     }
-    
+
+    // 获取目录结构（内部已自动创建子目录）
     const { success, tree, error } = await window.electronAPI.getTempDataStructure();
     if (!success) {
         addMessage(`无法获取目录结构: ${error}`, 'error');
         await window.electronAPI.openTempFolder();
         return;
     }
-    
+
+    // 获取静态模态框元素
     const modal = document.getElementById('manualImportModal');
-    if (!modal) return;
-    
+    if (!modal) {
+        addMessage('模态框未找到，请检查 index.html', 'error');
+        return;
+    }
+
     // 渲染目录树
     const container = document.getElementById('treeContainer');
     if (container) {
@@ -508,12 +514,40 @@ async function showManualImportDialog() {
             container.innerHTML = '<span style="color:#999;">目录为空或无法读取</span>';
         }
     }
-    
+
     // 同步复选框状态
-    const { ignore: currentIgnore } = await window.electronAPI.getManualImportIgnore();
     const chk = document.getElementById('dontShowAgainCheckbox');
-    if (chk) chk.checked = currentIgnore;
-    
+    if (chk) {
+        const { ignore: currentIgnore } = await window.electronAPI.getManualImportIgnore();
+        chk.checked = currentIgnore;
+    }
+
+    // 绑定按钮事件（确保只绑定一次）
+    if (!modal._bound) {
+        const closeBtn = document.getElementById('closeManualImportModal');
+        const cancelBtn = document.getElementById('cancelManualImportBtn');
+        const openFolderBtn = document.getElementById('openFolderBtn');
+        
+        if (closeBtn) closeBtn.onclick = () => modal.classList.remove('show');
+        if (cancelBtn) cancelBtn.onclick = () => modal.classList.remove('show');
+        if (openFolderBtn) {
+            openFolderBtn.onclick = async () => {
+                await window.electronAPI.openTempFolder();
+                const dontShow = document.getElementById('dontShowAgainCheckbox').checked;
+                if (dontShow) {
+                    await window.electronAPI.setManualImportIgnore(true);
+                }
+                modal.classList.remove('show');
+            };
+        }
+        // 点击遮罩关闭
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.classList.remove('show');
+        });
+        modal._bound = true;
+    }
+
+    // 显示模态框
     modal.classList.add('show');
 }
 

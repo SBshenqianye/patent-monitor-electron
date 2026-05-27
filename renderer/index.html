@@ -92,7 +92,7 @@
   </div>
 </div>
 
-<!-- 手动导入模态框（静态HTML） -->
+<!-- 手动导入数据模态框（静态） -->
 <div class="modal-overlay" id="manualImportModal">
   <div class="modal" style="width: 750px; max-width: 90vw;">
     <button class="close-modal" id="closeManualImportModal">&times;</button>
@@ -103,8 +103,11 @@
         请将您手动下载的专利数据文件放入以下对应文件夹：<br>
         • <code>temp_data/中国专利公布公告网/</code> ← 放置 .csv 文件（示例：<strong>专利数据_v2_20260525_170653.csv（爬虫生成）</strong>）<br>
         • <code>temp_data/天眼查/</code> ← 放置 .xlsx 文件（示例：<strong>【天眼查】专利信息-国网四川省电力公司内江供电公司(0520W99052099661779262459497).xlsx</strong>）<br>
-        • <code>temp_data/专利检索及分析网/</code> ← 放置 .xlsx 文件（示例：<strong>文件下载_8e14c196519f4daaa57bbfd1836fe144（需要解压）.xlsx</strong>）<br>
-        放置完成后，点击 <strong>“一键清洗”</strong> 按钮即可融合数据。
+        • <code>temp_data/专利检索及分析网/</code> ← 放置 .xlsx 文件（示例：<strong>文件下载_8e14c196519f4daaa57bbfd1836fe144（需要解压成xlsx文件）.xlsx</strong>）<br>
+        放置完成后，点击 <strong>“一键清洗”</strong> 按钮即可融合数据。<br><br>
+        <strong>💡 快捷提示：</strong> 您也可以直接访问以下网站，手动导出全量数据（通常比爬虫更稳定快捷）：<br>
+        &nbsp;&nbsp;🔗 <a href="https://www.tianyancha.com/company/2434381675/zhishi" target="_blank" rel="noopener noreferrer">天眼查 - 内江供电公司专利页</a> （导出为 Excel）<br>
+        &nbsp;&nbsp;🔗 <a href="https://pss-system.cponline.cnipa.gov.cn/Initpage" target="_blank" rel="noopener noreferrer">专利检索及分析网 (CNIPA)</a> （检索后导出全量数据）<br>
       </div>
       <div style="background: #f9f9f9; padding: 12px; border-radius: 8px;">
         <strong>📁 当前目录结构：</strong>
@@ -112,7 +115,9 @@
       </div>
     </div>
     <div style="display: flex; justify-content: space-between; align-items: center;">
-      <label style="cursor: pointer;"><input type="checkbox" id="dontShowAgainCheckbox"> 不再提示</label>
+      <label style="cursor: pointer;">
+        <input type="checkbox" id="dontShowAgainCheckbox"> 不再提示
+      </label>
       <div>
         <button id="openFolderBtn" class="btn btn-primary">📂 打开文件夹</button>
         <button id="cancelManualImportBtn" class="btn btn-outline">关闭</button>
