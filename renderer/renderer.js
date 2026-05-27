@@ -737,7 +737,7 @@ function setupEventListeners() {
     }
 
     if (status.name === 'all' && status.allDone) {
-      addMessage(`✅ 一键爬取完成`, 'success');
+      addMessage(`一键爬取完成`, 'success');
       loadData();
       document.getElementById('btnCrawl').disabled = false;
       document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
