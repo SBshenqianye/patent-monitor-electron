@@ -8,11 +8,7 @@
   --headless <true|false>  是否无头模式，默认 false
 
 输出路径: {data-dir}/temp_data/中国专利公布公告网/
-
-修复:
-- 多策略触发搜索 (evaluate + Enter + force click)
-- 搜索结果等待优化 (URL / DOM)
-- 反反爬措施: 随机延迟、真实浏览器配置、502重试
+日志路径: {data-dir}/log/中国专利公布公告网/
 """
 
 import csv
@@ -27,7 +23,15 @@ import json
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
+# ============================ 常量 ============================
+URL = "http://epub.cnipa.gov.cn/Index"
+DEFAULT_KEYWORDS = ["内江供电公司"]
+TOTAL_PAGES = 8
+WAIT_TIMEOUT = 90_000
+MAX_RETRIES = 3
+
 # ============================ 日志配置 ============================
+# 基础日志（stdout）
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -35,16 +39,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ============================ 常量 ============================
-URL = "http://epub.cnipa.gov.cn/Index"
-DEFAULT_KEYWORDS = ["内江供电公司"]
-TOTAL_PAGES = 8
-WAIT_TIMEOUT = 90_000
-MAX_RETRIES = 3  # 502 重试次数
+
+def setup_file_logging(data_dir):
+    """添加文件日志处理器"""
+    log_dir = Path(data_dir) / "log" / "中国专利公布公告网"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"crawl_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    fh = logging.FileHandler(log_file, encoding='utf-8')
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logging.getLogger().addHandler(fh)
+    logger.info(f"日志文件: {log_file}")
 
 
 def extract_patent_items_via_evaluate(page) -> list[dict]:
-    """使用 evaluate() 直接提取专利数据（v1 选择器）"""
     items = page.evaluate("""
         () => {
             const items = document.querySelectorAll('div.overview-default > div.item');
@@ -93,12 +101,11 @@ def extract_patent_items_via_evaluate(page) -> list[dict]:
             return result;
         }
     """)
-    logger.info(f"当前页面通过 evaluate 提取到 {len(items)} 条专利")
+    logger.info(f"evaluate 提取到 {len(items)} 条专利")
     return items
 
 
 def extract_patent_items_via_evaluate_v2(page) -> list[dict]:
-    """使用 evaluate() 直接提取专利数据（v2 宽松策略）"""
     items = page.evaluate("""
         () => {
             let containers = document.querySelectorAll('div.overview-default > div.item');
@@ -187,15 +194,11 @@ def extract_patent_items_via_evaluate_v2(page) -> list[dict]:
             return resultList;
         }
     """)
-    logger.info(f"当前页面通过 evaluate-v2 提取到 {len(items)} 条专利")
+    logger.info(f"evaluate-v2 提取到 {len(items)} 条专利")
     return items
 
 
 def trigger_search(page, keyword):
-    """
-    触发搜索：依次尝试 evaluate、Enter、force click。
-    一旦成功触发（页面即将跳转），立即返回，避免在跳转后的页面执行误操作。
-    """
     search_input = page.locator('input#searchStr[name="searchStr"]')
     search_input.wait_for(state="visible", timeout=WAIT_TIMEOUT)
     search_input.fill("")
@@ -203,7 +206,6 @@ def trigger_search(page, keyword):
     search_input.fill(keyword)
     logger.info("搜索词已填入")
 
-    # 方式1：直接调用 index_Query() —— 成功则返回
     try:
         page.evaluate("index_Query()")
         logger.info("已通过 evaluate 调用 index_Query()")
@@ -211,7 +213,6 @@ def trigger_search(page, keyword):
     except Exception as e:
         logger.warning(f"evaluate index_Query() 失败: {e}")
 
-    # 方式2：按 Enter 键
     try:
         search_input.press("Enter")
         logger.info("已按 Enter 键提交搜索")
@@ -219,7 +220,6 @@ def trigger_search(page, keyword):
     except Exception as e:
         logger.warning(f"按 Enter 键失败: {e}")
 
-    # 方式3：强制点击按钮（备用）
     try:
         search_btn = page.locator('button[onclick="index_Query()"], button.sbtn').first
         if search_btn.is_visible(timeout=2000):
@@ -230,7 +230,6 @@ def trigger_search(page, keyword):
 
 
 def wait_for_results(page, timeout_seconds=60):
-    """等待搜索结果显示"""
     try:
         page.wait_for_url(
             lambda url: "IndexQuery" in url or "Dxb" in url or "Search" in url,
@@ -243,7 +242,7 @@ def wait_for_results(page, timeout_seconds=60):
 
     try:
         page.wait_for_selector("div.overview-default", timeout=5000)
-        logger.info("在 DOM 中找到 overview-default，认为搜索完成")
+        logger.info("找到 overview-default 容器")
         return True
     except PlaywrightTimeout:
         pass
@@ -255,7 +254,6 @@ def wait_for_results(page, timeout_seconds=60):
             return True
     except:
         pass
-
     return False
 
 
@@ -269,8 +267,11 @@ def main():
     args = parser.parse_args()
 
     headless = args.headless.lower() == 'true'
-
     data_dir = Path(args.data_dir)
+
+    # 设置文件日志
+    setup_file_logging(data_dir)
+
     output_dir = data_dir / "temp_data" / "中国专利公布公告网"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -301,7 +302,6 @@ def main():
                 "--accept-lang=zh-CN,zh",
             ],
         )
-        # 更接近真实浏览器的上下文配置
         context = browser.new_context(
             viewport={"width": 1366, "height": 768},
             user_agent=(
@@ -318,7 +318,6 @@ def main():
 
         try:
             for kw_index, keyword in enumerate(keywords):
-                # 关键词之间随机延迟 3~7 秒
                 if kw_index > 0:
                     wait = random.uniform(3, 7)
                     logger.info(f"等待 {wait:.1f} 秒再搜索下一个关键词...")
@@ -326,7 +325,6 @@ def main():
 
                 logger.info(f"爬取关键词 {kw_index+1}/{len(keywords)}: {keyword}")
 
-                # 访问首页，带 502 重试
                 for attempt in range(1, MAX_RETRIES + 1):
                     try:
                         page.goto(URL, wait_until="load", timeout=WAIT_TIMEOUT)
@@ -341,21 +339,17 @@ def main():
                     logger.error("连续 502，跳过该关键词")
                     continue
 
-                # 刷新并等待网络空闲，降低后续 502 风险
                 page.reload(wait_until="networkidle")
                 page.wait_for_timeout(random.randint(2000, 4000))
 
-                # 触发搜索
                 trigger_search(page, keyword)
 
-                # 等待搜索结果
                 if not wait_for_results(page, 60):
                     logger.warning(f"关键词 '{keyword}' 搜索失败，跳过")
                     continue
 
                 logger.info("搜索结果页已加载")
 
-                # 修改每页显示条数为10（可选）
                 page.wait_for_timeout(random.randint(2000, 3000))
                 try:
                     size_select = page.locator('select#sizeSelect.listnum')
@@ -366,13 +360,11 @@ def main():
                 except PlaywrightTimeout:
                     logger.warning("无法修改每页条数，继续使用默认值")
 
-                # 分页爬取
                 current_page = 1
                 while current_page <= TOTAL_PAGES:
                     logger.info(f"处理第 {current_page} 页")
                     page.wait_for_timeout(random.randint(2000, 3000))
 
-                    # 提取数据
                     patents = extract_patent_items_via_evaluate_v2(page)
                     if not patents:
                         patents = extract_patent_items_via_evaluate(page)
@@ -398,7 +390,6 @@ def main():
                     if current_page >= TOTAL_PAGES:
                         break
 
-                    # 翻页（带随机延迟）
                     try:
                         next_btn = page.locator('a.next_page')
                         if next_btn.is_visible(timeout=5000):

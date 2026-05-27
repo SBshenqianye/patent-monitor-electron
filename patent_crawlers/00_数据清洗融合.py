@@ -5,6 +5,7 @@
       ../temp_data/天眼查/*.xlsx
       ../temp_data/专利检索及分析网/*.xlsx
 输出：./cleaned_data/专利数据_清洗融合.json + .xlsx
+日志：./log/数据清洗/
 """
 
 import os
@@ -14,26 +15,44 @@ import json
 import csv
 import sys
 import calendar
+import logging
 from datetime import datetime, date
 from glob import glob
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
+# ==================== 日志配置 ====================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
+
+
+def setup_file_logging(data_dir):
+    """添加文件日志"""
+    log_dir = os.path.join(data_dir, "log", "数据清洗")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"clean_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    fh = logging.FileHandler(log_file, encoding='utf-8')
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logging.getLogger().addHandler(fh)
+    logger.info(f"日志文件: {log_file}")
+
+
 sys.stdout.reconfigure(encoding='utf-8')
 
 # ==================== 工具函数 ====================
 def normalize_apply_id(raw_id):
-    """标准化申请号：去除CN、空格、点号，返回无点号版本"""
     if not raw_id:
         return ""
     raw = str(raw_id).strip()
-    # 去 CN 前缀、空格
     v1 = re.sub(r'^CN', '', raw).strip()
-    # 去所有点号
     return v1.replace('.', '')
 
 def parse_apply_date(date_str):
-    """统一日期为 YYYY-MM-DD"""
     if not date_str:
         return ""
     s = str(date_str).strip()[:10]
@@ -44,8 +63,22 @@ def parse_apply_date(date_str):
             continue
     return s
 
-def compute_expiry(apply_date_str, patent_type):
-    """计算专利到期日及剩余天数"""
+def infer_patent_type(title):
+    """从标题推断专利类型"""
+    if not title:
+        return ''
+    if '发明' in title:
+        return '发明'
+    if '实用新型' in title or '实用' in title:
+        return '实用新型'
+    if '外观设计' in title or '外观' in title:
+        return '外观设计'
+    return ''
+
+def compute_expiry(apply_date_str, patent_type, title=''):
+    """
+    计算专利到期日，对外观设计考虑新旧法
+    """
     if not apply_date_str:
         return "", -1
     d = parse_apply_date(apply_date_str)
@@ -56,23 +89,38 @@ def compute_expiry(apply_date_str, patent_type):
     except:
         return "", -1
 
-    years = 20 if '发明' in patent_type else 10 if '实用' in patent_type else 15
+    # 确定类型（优先使用传入的类型，否则从标题推断）
+    ptype = patent_type if patent_type else infer_patent_type(title)
+    if not ptype:
+        # 默认按发明处理（最长时间）
+        years = 20
+    elif '发明' in ptype:
+        years = 20
+    elif '实用' in ptype:
+        years = 10
+    elif '外观' in ptype:
+        if ad >= date(2021, 6, 1):
+            years = 15
+        else:
+            years = 10
+    else:
+        years = 20
+
     try:
         expiry = date(ad.year + years, ad.month, ad.day)
     except ValueError:
         last_day = calendar.monthrange(ad.year + years, ad.month)[1]
         expiry = date(ad.year + years, ad.month, min(ad.day, last_day))
+
     days = (expiry - date.today()).days
     return expiry.strftime("%Y-%m-%d"), days
 
 def clean_title(title):
-    """清洗标题：去除多余空白和换行"""
     if not title:
         return ""
     return re.sub(r'\s+', ' ', str(title)).strip()
 
 def clean_inventor(raw):
-    """清洗发明人：去‘全部’、统一分隔符为分号"""
     if not raw:
         return ""
     text = str(raw).replace('\n', ' ').replace('\r', '')
@@ -86,21 +134,26 @@ def parse_address_field(raw_addr):
     if not raw_addr:
         return "", "", "", "", ""
     text = str(raw_addr).strip()
+
     # 截断“事务数据”之后的内容
     idx = text.find("事务数据")
     if idx != -1:
         text = text[:idx]
 
-    # 提取摘要
+    # 提取摘要（修复核心）
     abstract = ""
-    m = re.search(r'摘要[：:]\s*(.+?)(?=\s*(?:发明|实用|外观|$))', text, re.DOTALL)
+    m = re.search(r'摘要[：:]\s*(.+)', text, re.DOTALL)
     if m:
-        abstract = re.sub(r'\s+', ' ', m.group(1)).replace('全部', '').strip()
+        abstract = m.group(1)
+        # 删除末尾的“全部”及其后的“发明专利申请”等
+        abstract = re.sub(r'\s*全部\s*$', '', abstract)
+        abstract = re.sub(r'\s*发明专利申请\s*$', '', abstract)
+        abstract = re.sub(r'\s+', ' ', abstract).strip()
         text = text[:m.start()]
 
     # 提取专利代理师
     patent_agent = ""
-    m = re.search(r'专利代理师[：:]\s*(.+?)(?=\s*(?:摘要|专利代理机构|$))', text, re.DOTALL)
+    m = re.search(r'专利代理师[：:]\s*(.+?)(?=\s*(?:专利代理机构|摘要|$))', text, re.DOTALL)
     if m:
         patent_agent = re.sub(r'\s+', '', m.group(1)).strip()
         text = text[:m.start()]
@@ -119,21 +172,20 @@ def parse_address_field(raw_addr):
         classification = re.sub(r'\s+', ' ', m.group(1)).replace('全部', '').strip('; ')
         text = text[:m.start()]
 
-    # 剩余为地址，去除‘发明专利申请’等标记
+    # 剩余为地址
     address = re.sub(r'\s*发明专利申请\s*', '', text).strip()
-    address = re.sub(r'\s+', '', address)  # 邮编+地址不留空格
+    address = re.sub(r'\s+', '', address)
     return address, classification, patent_agency, patent_agent, abstract
 
 
 # ==================== 读取各网站原始文件 ====================
 def read_publish_csv(folder):
-    """读取中国专利公布公告网的 CSV（取最新文件）"""
     files = glob(os.path.join(folder, '*.csv'))
     if not files:
-        print("  ⚠ 未找到 CSV 文件")
+        logger.warning("未找到 CSV 文件")
         return []
     latest = max(files, key=os.path.getmtime)
-    print(f"  读取: {os.path.basename(latest)}")
+    logger.info(f"读取: {os.path.basename(latest)}")
     records = []
     with open(latest, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
@@ -144,7 +196,6 @@ def read_publish_csv(folder):
                 continue
             addr_raw = row.get('地址', '')
             addr, cls, agency, agent, abstract = parse_address_field(addr_raw)
-            # 去除标题前缀，如“[发明公布]”
             raw_title = row.get('标题', '')
             title = re.sub(r'^\[.*?\]\s*', '', raw_title)
             records.append({
@@ -164,17 +215,15 @@ def read_publish_csv(folder):
     return records
 
 def read_tianyan_xlsx(folder):
-    """读取天眼查 XLSX（取最新文件）"""
     files = glob(os.path.join(folder, '*.xlsx'))
     if not files:
-        print("  ⚠ 未找到 XLSX 文件")
+        logger.warning("未找到 XLSX 文件")
         return []
     latest = max(files, key=os.path.getmtime)
-    print(f"  读取: {os.path.basename(latest)}")
+    logger.info(f"读取: {os.path.basename(latest)}")
     wb = openpyxl.load_workbook(latest, data_only=True)
     ws = wb['专利信息']
     records = []
-    # 提取公司名（第6行）
     company_name = ""
     for row in ws.iter_rows(min_row=6, max_row=6, max_col=1, values_only=True):
         if row[0]:
@@ -183,7 +232,7 @@ def read_tianyan_xlsx(folder):
                 company_name = m.group(1)
 
     for row in ws.iter_rows(min_row=8, max_row=ws.max_row, values_only=True):
-        if not row[0]:  # 序号为空则跳过
+        if not row[0]:
             continue
         raw_id = str(row[4]).strip() if row[4] else ''
         aid = normalize_apply_id(raw_id)
@@ -207,16 +256,14 @@ def read_tianyan_xlsx(folder):
     return records
 
 def read_search_xlsx(folder):
-    """读取专利检索及分析网 XLSX（取最新文件）"""
     files = glob(os.path.join(folder, '*.xlsx'))
     if not files:
-        print("  ⚠ 未找到 XLSX 文件")
+        logger.warning("未找到 XLSX 文件")
         return []
     latest = max(files, key=os.path.getmtime)
-    print(f"  读取: {os.path.basename(latest)}")
+    logger.info(f"读取: {os.path.basename(latest)}")
     wb = openpyxl.load_workbook(latest, data_only=True)
     ws = wb.active
-    # 解析表头
     headers = {}
     for c in range(1, ws.max_column + 1):
         headers[c] = str(ws.cell(1, c).value or '').strip()
@@ -274,22 +321,15 @@ def read_search_xlsx(folder):
 
 # ==================== 融合逻辑 ====================
 def merge_all(search_data, tianyan_data, publish_data):
-    """
-    以 search_data 为主，补充天眼查和公布公告数据。
-    若 search_data 中无对应申请号，则从天眼查/公布公告补入。
-    """
     merged = {}
-    # 先放入 search 数据（专利检索分析网）
     for rec in search_data:
         merged[rec['applyId']] = dict(rec)
         merged[rec['applyId']]['source'] = '专利检索分析网'
 
-    # 天眼查补充
     for rec in tianyan_data:
         aid = rec['applyId']
         if aid in merged:
             item = merged[aid]
-            # 补充分类号、法律状态、公司等
             for key in ['company', 'legalStatus', 'patentType']:
                 if rec.get(key) and not item.get(key):
                     item[key] = rec[key]
@@ -301,7 +341,6 @@ def merge_all(search_data, tianyan_data, publish_data):
             merged[aid] = dict(rec)
             merged[aid]['source'] = '天眼查'
 
-    # 公布公告补充
     for rec in publish_data:
         aid = rec['applyId']
         if aid in merged:
@@ -311,7 +350,6 @@ def merge_all(search_data, tianyan_data, publish_data):
                     item[key] = rec[key]
             if rec.get('pubDate') and not item.get('pubDate'):
                 item['pubDate'] = rec['pubDate']
-            # 发明人合并
             if rec.get('inventor'):
                 exist = set(item.get('inventor', '').split('; ')) if item.get('inventor') else set()
                 new = set(rec['inventor'].split('; '))
@@ -324,11 +362,10 @@ def merge_all(search_data, tianyan_data, publish_data):
         else:
             merged[aid] = dict(rec)
             merged[aid]['source'] = '中国专利公布公告'
-
     return list(merged.values())
 
 
-# ==================== 最终清洗及输出 ====================
+# ==================== 最终清洗 ====================
 def final_clean(records):
     cleaned = []
     for rec in records:
@@ -350,11 +387,13 @@ def final_clean(records):
             'source': rec.get('source', ''),
             'pubId': rec.get('pubId', ''),
         }
-        # 过期日
-        expiry, days = compute_expiry(item['applyDate'], item['patentType'])
+        # 如果类型仍为空，从标题推断
+        if not item['patentType']:
+            item['patentType'] = infer_patent_type(item['title'])
+        # 计算过期日
+        expiry, days = compute_expiry(item['applyDate'], item['patentType'], item['title'])
         item['expiryDate'] = expiry
         item['daysRemaining'] = days
-        # 申请年份
         if item['applyDate'] and len(item['applyDate']) >= 4:
             item['applyYear'] = int(item['applyDate'][:4])
         else:
@@ -364,16 +403,14 @@ def final_clean(records):
 
 
 def save_output(records, OUTPUT_DIR):
-    
     OUTPUT_JSON = os.path.join(OUTPUT_DIR, '专利数据_清洗融合.json')
     OUTPUT_XLSX = os.path.join(OUTPUT_DIR, '专利数据_清洗融合.xlsx')
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    # JSON
+
     with open(OUTPUT_JSON, 'w', encoding='utf-8') as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
-    print(f"\n[OK] JSON 已保存: {OUTPUT_JSON} ({len(records)} 条)")
+    logger.info(f"JSON 已保存: {OUTPUT_JSON} ({len(records)} 条)")
 
-    # XLSX
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "专利数据"
@@ -410,59 +447,54 @@ def save_output(records, OUTPUT_DIR):
         ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = w
     ws.freeze_panes = 'A2'
     wb.save(OUTPUT_XLSX)
-    print(f"[OK] Excel 已保存: {OUTPUT_XLSX} ({len(records)} 条)")
+    logger.info(f"Excel 已保存: {OUTPUT_XLSX} ({len(records)} 条)")
 
 
 # ==================== 主流程 ====================
 def main():
     parser = argparse.ArgumentParser(description='专利数据清洗融合')
-    parser.add_argument('--data-dir', required=True, help='用户数据目录（包含爬虫输出JSON文件）')
+    parser.add_argument('--data-dir', required=True, help='用户数据目录')
     args = parser.parse_args()
 
     data_dir = args.data_dir
-    print(f"{'=' * 70}")
-    print(f"专利数据清洗融合 v4.0 (Electron版)")
-    print(f"数据目录: {data_dir}")
-    print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'=' * 70}")
+    # 设置文件日志
+    setup_file_logging(data_dir)
 
+    logger.info("=" * 70)
+    logger.info("专利数据清洗融合 v4.0 (Electron版)")
+    logger.info(f"数据目录: {data_dir}")
+    logger.info(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 70)
 
-    # ==================== 路径配置 ====================
-    INPUT_DIR = os.path.join(data_dir, "temp_data")       # 输入根目录
-    OUTPUT_DIR = os.path.join(data_dir, 'cleaned_data')    # 输出目录
-    
-    # 输入文件夹
+    INPUT_DIR = os.path.join(data_dir, "temp_data")
+    OUTPUT_DIR = os.path.join(data_dir, 'cleaned_data')
+
     publish_dir = os.path.join(INPUT_DIR, '中国专利公布公告网')
     tianyan_dir = os.path.join(INPUT_DIR, '天眼查')
     search_dir = os.path.join(INPUT_DIR, '专利检索及分析网')
 
-    # 读取
-    print("\n[1] 读取中国专利公布公告 CSV...")
+    logger.info("[1] 读取中国专利公布公告 CSV...")
     publish_data = read_publish_csv(publish_dir) if os.path.isdir(publish_dir) else []
-    print(f"    → {len(publish_data)} 条")
+    logger.info(f"    → {len(publish_data)} 条")
 
-    print("\n[2] 读取天眼查 XLSX...")
+    logger.info("[2] 读取天眼查 XLSX...")
     tianyan_data = read_tianyan_xlsx(tianyan_dir) if os.path.isdir(tianyan_dir) else []
-    print(f"    → {len(tianyan_data)} 条")
+    logger.info(f"    → {len(tianyan_data)} 条")
 
-    print("\n[3] 读取专利检索分析网 XLSX...")
+    logger.info("[3] 读取专利检索分析网 XLSX...")
     search_data = read_search_xlsx(search_dir) if os.path.isdir(search_dir) else []
-    print(f"    → {len(search_data)} 条")
+    logger.info(f"    → {len(search_data)} 条")
 
-    # 融合
-    print("\n[4] 数据融合...")
+    logger.info("[4] 数据融合...")
     merged = merge_all(search_data, tianyan_data, publish_data)
-    print(f"    → 融合后 {len(merged)} 条")
+    logger.info(f"    → 融合后 {len(merged)} 条")
 
-    # 清洗
-    print("\n[5] 最终清洗...")
+    logger.info("[5] 最终清洗...")
     cleaned = final_clean(merged)
 
-    # 输出
-    print("\n[6] 保存结果...")
+    logger.info("[6] 保存结果...")
     save_output(cleaned, OUTPUT_DIR)
 
-    # 简单统计
     sources = {}
     types = {}
     for r in cleaned:
@@ -470,13 +502,14 @@ def main():
         sources[s] = sources.get(s, 0) + 1
         t = r['patentType']
         types[t] = types.get(t, 0) + 1
-    print("\n数据来源分布：")
+    logger.info("数据来源分布：")
     for k, v in sources.items():
-        print(f"  {k}: {v}")
-    print("\n专利类型分布：")
+        logger.info(f"  {k}: {v}")
+    logger.info("专利类型分布：")
     for k, v in types.items():
-        print(f"  {k}: {v}")
-    print("\n完成！")
+        logger.info(f"  {k}: {v}")
+    logger.info("完成！")
+
 
 if __name__ == '__main__':
     main()
