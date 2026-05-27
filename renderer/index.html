@@ -112,30 +112,6 @@
   </div>
 </div>
 
-<!-- 登录弹窗 -->
-<div class="modal-overlay" id="loginModal" style="display:none;">
-  <div class="modal-dialog">
-    <div class="modal-header"><h3>🔑 需要登录</h3></div>
-    <div class="modal-body">
-      <p id="loginMessage">该爬虫需要登录网站才能使用。</p>
-      <p>点击下方按钮将打开浏览器窗口，请完成登录后关闭浏览器。</p>
-      <div class="login-tips">
-        <h4>登录提示：</h4>
-        <ul>
-          <li>浏览器将以可见模式打开</li>
-          <li>请在浏览器中手动完成登录（扫码/账号密码）</li>
-          <li>登录成功后关闭浏览器窗口即可</li>
-          <li>登录会话将被持久化保存，下次无需重复登录</li>
-        </ul>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-outline" onclick="cancelLogin()">取消</button>
-      <button class="btn btn-primary" id="btnStartLogin" onclick="startLogin()">开始登录</button>
-    </div>
-  </div>
-</div>
-
 <script src="renderer.js"></script>
 </body>
 </html>

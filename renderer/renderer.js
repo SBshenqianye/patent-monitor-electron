@@ -4,7 +4,6 @@
 let DATA = [];
 let currentFilter = '';
 let currentTab = 'table';
-let currentLoginName = null;
 
 let currentCrawlMsg = null;
 let currentCleaningRunningMsg = null;
@@ -420,56 +419,32 @@ function handleClean() {
     });
 }
 
-function showLoginModal(source) {
-    document.getElementById('loginMessage').textContent = `爬虫「${source}」需要登录相关网站才能使用。`;
-    document.getElementById('loginModal').style.display = 'flex';
-}
-function closeLoginModal() { document.getElementById('loginModal').style.display = 'none'; }
-function startLogin() {
-    if (currentLoginName) window.electronAPI.guideLogin(currentLoginName).catch(err => addMessage(`登录引导失败: ${err.message}`, 'error', 0));
-    closeLoginModal();
-}
-function cancelLogin() {
-    if (currentLoginName) window.electronAPI.cancelLogin(currentLoginName);
-    closeLoginModal();
-    currentLoginName = null;
-}
-
 // ======================== 事件监听 ========================
 function setupEventListeners() {
     window.electronAPI.onCrawlerStatus(async (status) => {
         console.log('爬虫状态:', status);
         if (status.name !== 'all') {
-            if (status.status === 'waiting-login') {
-                // 排队登录消息放入 Map，以便后续替换
-                if (runningCrawlerMessages.has(status.name)) {
-                    await removeMessage(runningCrawlerMessages.get(status.name));
-                    runningCrawlerMessages.delete(status.name);
-                }
-                const msg = addMessage(status.message, 'info', 0);
-                runningCrawlerMessages.set(status.name, msg);
-            } else if (status.status === 'running') {
-                const oldMsg = runningCrawlerMessages.get(status.name);
+            const msgMap = runningCrawlerMessages;
+            if (status.status === 'waiting-login' || status.status === 'running') {
+                const oldMsg = msgMap.get(status.name);
                 if (oldMsg) {
                     await replaceMessage(oldMsg, status.message, 'info', 0);
                 } else {
                     const msg = addMessage(status.message, 'info', 0);
-                    runningCrawlerMessages.set(status.name, msg);
+                    msgMap.set(status.name, msg);
                 }
             } else if (status.status === 'completed') {
-                const oldMsg = runningCrawlerMessages.get(status.name);
+                const oldMsg = msgMap.get(status.name);
                 if (oldMsg) {
                     await replaceMessage(oldMsg, `${status.name} 完成`, 'success');
-                    runningCrawlerMessages.delete(status.name);
+                    msgMap.delete(status.name);
                 } else addMessage(`${status.name} 完成`, 'success');
             } else if (status.status === 'error') {
-                const oldMsg = runningCrawlerMessages.get(status.name);
+                const oldMsg = msgMap.get(status.name);
                 if (oldMsg) {
                     await replaceMessage(oldMsg, `${status.name} 失败: ${status.message}`, 'error', 0);
-                    runningCrawlerMessages.delete(status.name);
+                    msgMap.delete(status.name);
                 } else addMessage(`${status.name} 失败: ${status.message}`, 'error', 0);
-            } else {
-                addMessage(status.message, 'info', 3000);
             }
         }
         if (status.name === 'all' && status.allDone) {
@@ -496,32 +471,6 @@ function setupEventListeners() {
             document.getElementById('btnClean').disabled = false;
             document.getElementById('btnClean').textContent = '🧹 一键清洗';
         }
-    });
-
-    window.electronAPI.onLoginRequired((data) => {
-        addMessage(`爬虫“${data.name}”需要登录，请手动完成登录`, 'warning');
-        currentLoginName = data.name;
-        showLoginModal(data.name);
-    });
-    window.electronAPI.onLoginDone((data) => {
-        addMessage(`“${data.name}”登录已完成`, 'success');
-        closeLoginModal();
-        currentLoginName = null;
-        loadData();
-    });
-    window.electronAPI.onLoginTimeout((data) => {
-        addMessage(`“${data.name}”登录超时，已自动跳过`, 'error');
-        const oldMsg = runningCrawlerMessages.get(data.name);
-        if (oldMsg) { removeMessage(oldMsg); runningCrawlerMessages.delete(data.name); }
-        closeLoginModal();
-        currentLoginName = null;
-    });
-    window.electronAPI.onLoginCancelled((data) => {
-        addMessage(`“${data.name}”登录已取消`, 'info');
-        const oldMsg = runningCrawlerMessages.get(data.name);
-        if (oldMsg) { removeMessage(oldMsg); runningCrawlerMessages.delete(data.name); }
-        closeLoginModal();
-        currentLoginName = null;
     });
 }
 
@@ -557,7 +506,3 @@ document.addEventListener('DOMContentLoaded', () => {
 window.handleCrawl = handleCrawl;
 window.handleClean = handleClean;
 window.loadData = loadData;
-window.showLoginModal = showLoginModal;
-window.closeLoginModal = closeLoginModal;
-window.startLogin = startLogin;
-window.cancelLogin = cancelLogin;
