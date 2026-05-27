@@ -1,17 +1,19 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const XLSX = require('xlsx');  // 需要 npm install xlsx
 
 let mainWindow = null;
 let userDataDir = null;
 let dataDir = null;
 let scriptsDir = null;
+let tempDataDir = null;
 
 const childProcesses = new Map();
 const CRAWLER_TIMEOUT = 5 * 60 * 1000;    // 5 分钟
 
-// 登录互斥锁：同一时间只允许一个需要登录的爬虫运行
+// 登录互斥锁
 let loginSlotBusy = false;
 const loginWaitQueue = [];
 
@@ -45,10 +47,18 @@ function releaseLoginSlot(name) {
 function initPaths() {
     userDataDir = app.getPath('userData');
     dataDir = path.join(userDataDir, 'data');
+    tempDataDir = path.join(dataDir, 'temp_data');
     scriptsDir = app.isPackaged
         ? path.join(process.resourcesPath, 'patent_crawlers')
         : path.join(__dirname, 'patent_crawlers');
     fs.mkdirSync(dataDir, { recursive: true });
+    fs.mkdirSync(tempDataDir, { recursive: true });
+    
+    // 确保三个子目录存在
+    const subDirs = ['中国专利公布公告网', '天眼查', '专利检索及分析网'];
+    for (const sub of subDirs) {
+        fs.mkdirSync(path.join(tempDataDir, sub), { recursive: true });
+    }
 }
 
 function getScriptPath(scriptName) {
@@ -134,7 +144,6 @@ async function runCrawler(name, scriptName, requiresLogin) {
         return { success: false, error: `脚本不存在: ${scriptPath}` };
     }
 
-    // 需要登录则获取互斥锁（排队）
     if (requiresLogin) {
         sendToRenderer('crawler-status', { name, status: 'waiting-login', message: `正在排队等待登录...` });
         await acquireLoginSlot(name);
@@ -145,7 +154,6 @@ async function runCrawler(name, scriptName, requiresLogin) {
     const startTime = Date.now();
     try {
         const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'crawl']);
-        // 判定成功：脚本输出 JSON 中 success=true 或 有新文件
         const lines = result.stdout.trim().split('\n');
         const lastLine = lines[lines.length - 1].trim();
         let scriptSuccess = false;
@@ -173,7 +181,7 @@ async function runAllCrawlers() {
     const crawlerScripts = [
         { name: '爬虫A-专利公告', script: '01_专利过期监控爬虫_v2.py', requiresLogin: false },
         { name: '爬虫B-天眼查', script: '02_天眼查专利导出.py', requiresLogin: true },
-        // { name: '爬虫C-CNIPA', script: '03_CNIPA专利导出.py', requiresLogin: true },
+        { name: '爬虫C-CNIPA', script: '03_CNIPA专利导出.py', requiresLogin: true },
     ];
 
     const promises = crawlerScripts.map(c => runCrawler(c.name, c.script, c.requiresLogin));
@@ -184,7 +192,6 @@ async function runAllCrawlers() {
         message: r.status === 'fulfilled' ? (r.value?.success ? '完成' : (r.value?.error || '未知错误')) : '进程异常',
     }));
 
-    // 统计成功数量，决定是否提示清洗
     const successCount = finalResults.filter(r => r.status === 'completed').length;
     if (successCount > 0) {
         sendToRenderer('crawler-status', {
@@ -229,6 +236,149 @@ function readCleanedJson() {
     } catch { return null; }
 }
 
+// ========== 目录树递归 ==========
+function getDirectoryTree(dirPath, depth = 0, maxDepth = 3) {
+    if (depth > maxDepth) return {
+        name: path.basename(dirPath),
+        type: 'dir',
+        truncated: true,
+        children: []
+    };
+    const stats = fs.statSync(dirPath);
+    const item = {
+        name: path.basename(dirPath),
+        type: stats.isDirectory() ? 'dir' : 'file',
+        path: dirPath,
+    };
+    if (stats.isDirectory()) {
+        item.children = [];
+        try {
+            const entries = fs.readdirSync(dirPath);
+            for (const entry of entries) {
+                const fullPath = path.join(dirPath, entry);
+                try {
+                    const entryStats = fs.statSync(fullPath);
+                    if (entryStats.isDirectory() || /\.(xlsx|csv|json)$/i.test(entry)) {
+                        item.children.push(getDirectoryTree(fullPath, depth + 1, maxDepth));
+                    }
+                } catch (err) {}
+            }
+        } catch (err) {}
+    }
+    return item;
+}
+
+// 用户配置
+const configPath = path.join(app.getPath('userData'), 'userConfig.json');
+function readUserConfig() {
+    try {
+        if (fs.existsSync(configPath)) {
+            return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        }
+    } catch (err) {}
+    return {};
+}
+function writeUserConfig(config) {
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+}
+
+// ========== IPC 处理 ==========
+function setupIPC() {
+    ipcMain.handle('get-data', () => {
+        const data = readCleanedJson();
+        return { success: true, data: data || { patents: [] } };
+    });
+    ipcMain.handle('run-all-crawlers', async () => {
+        const results = await runAllCrawlers();
+        return { success: true, results };
+    });
+    ipcMain.handle('run-cleaning', runCleaning);
+    ipcMain.handle('get-data-dir', () => dataDir);
+    ipcMain.handle('get-user-data-dir', () => userDataDir);
+    
+    // 手动导入相关
+    ipcMain.handle('open-temp-folder', async () => {
+        if (tempDataDir && fs.existsSync(tempDataDir)) {
+            shell.openPath(tempDataDir);
+            return { success: true };
+        }
+        return { success: false, error: '临时数据目录不存在' };
+    });
+    ipcMain.handle('get-temp-data-dir', () => tempDataDir);
+    ipcMain.handle('get-temp-data-structure', () => {
+        if (!fs.existsSync(tempDataDir)) {
+            fs.mkdirSync(tempDataDir, { recursive: true });
+        }
+        // 确保三个子目录存在
+        const subDirs = ['中国专利公布公告网', '天眼查', '专利检索及分析网'];
+        for (const sub of subDirs) {
+            fs.mkdirSync(path.join(tempDataDir, sub), { recursive: true });
+        }
+        try {
+            const tree = getDirectoryTree(tempDataDir);
+            return { success: true, tree };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    });
+    ipcMain.handle('get-manual-import-ignore', () => {
+        const config = readUserConfig();
+        return { ignore: config.manualImportIgnore === true };
+    });
+    ipcMain.handle('set-manual-import-ignore', (event, ignore) => {
+        const config = readUserConfig();
+        config.manualImportIgnore = ignore;
+        writeUserConfig(config);
+        return { success: true };
+    });
+
+    // 导出 Excel
+    ipcMain.handle('export-to-excel', async (event, data) => {
+        if (!data || !data.length) {
+            return { success: false, error: '没有数据可导出' };
+        }
+        const columns = [
+            { header: '申请号', key: 'applyId' },
+            { header: '发明名称', key: 'title' },
+            { header: '申请日', key: 'applyDate' },
+            { header: '公开(公告)日', key: 'pubDate' },
+            { header: '申请人', key: 'applicant' },
+            { header: '公司', key: 'company' },
+            { header: '发明人', key: 'inventor' },
+            { header: 'IPC分类号', key: 'classification' },
+            { header: '地址', key: 'address' },
+            { header: '专利类型', key: 'patentType' },
+            { header: '法律状态', key: 'legalStatus' },
+            { header: '剩余天数', key: 'daysRemaining' },
+            { header: '预计到期日', key: 'expiryDate' },
+            { header: '专利代理机构', key: 'patentAgency' },
+            { header: '专利代理师', key: 'patentAgent' },
+            { header: '摘要', key: 'abstract' },
+            { header: '来源', key: 'source' },
+        ];
+        const sheetData = [columns.map(c => c.header)];
+        for (const item of data) {
+            const row = columns.map(c => {
+                let val = item[c.key];
+                if (val === undefined || val === null) return '';
+                if (c.key === 'daysRemaining' && val === null) return '';
+                return val;
+            });
+            sheetData.push(row);
+        }
+        const workbook = XLSX.utils.book_new();
+        const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+        XLSX.utils.book_append_sheet(workbook, worksheet, '专利数据');
+        const outputDir = path.join(process.cwd(), 'output');
+        fs.mkdirSync(outputDir, { recursive: true });
+        const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+        const filename = `专利数据_导出_${timestamp}.xlsx`;
+        const filepath = path.join(outputDir, filename);
+        XLSX.writeFile(workbook, filepath);
+        return { success: true, filepath };
+    });
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1400, height: 900,
@@ -244,22 +394,7 @@ function createWindow() {
     mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-// ========== IPC ==========
-function setupIPC() {
-    ipcMain.handle('get-data', () => {
-        const data = readCleanedJson();
-        return { success: true, data: data || { patents: [] } };
-    });
-    ipcMain.handle('run-all-crawlers', async () => {
-        const results = await runAllCrawlers();
-        return { success: true, results };
-    });
-    ipcMain.handle('run-cleaning', runCleaning);
-    ipcMain.handle('get-data-dir', () => dataDir);
-    ipcMain.handle('get-user-data-dir', () => userDataDir);
-}
-
-// ========== 生命周期 ==========
+// 生命周期
 app.whenReady().then(() => {
     initPaths();
     setupIPC();

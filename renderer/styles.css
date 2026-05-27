@@ -855,3 +855,15 @@ tbody tr.urgent-row {
     color: #333;
     opacity: 1;
 }
+
+/* 树形结构样式（可选） */
+.tree-children {
+    margin-left: 24px;
+}
+#treeContainer span {
+    cursor: default;
+    user-select: text;
+}
+#treeContainer .tree-children {
+    margin-left: 24px;
+}

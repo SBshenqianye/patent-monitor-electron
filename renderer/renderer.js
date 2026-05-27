@@ -289,12 +289,13 @@ function renderTable() {
     list.forEach(p => {
         const d = p.daysRemaining;
         html += `<tr class="${rowClass(d)}" data-id="${esc(p.applyId || '')}">`;
-        html += `<td>${badgeHtml(d)}</td><td style="font-weight:600;color:${colorVal(d)}">${daysStr(d)}</td>`;
-        html += `<td class="col-id">${esc(p.applyId || '')}</td><td class="col-title" title="${esc(p.title || '')}">${esc((p.title || '').substring(0, 60))}</td>`;
-        html += `<td>${esc(p.applyDate || '')}</td><td>${esc(p.pubDate || '')}</td><td>${esc(p.expiryDate || '')}</td>`;
-        html += `<td title="${esc(p.inventor || '')}">${esc((p.inventor || '').substring(0, 14))}</td>`;
-        html += `<td class="col-agency" title="${esc(p.patentAgency || '')}">${esc((p.patentAgency || '').substring(0, 18))}</td>`;
-        html += `<td>${esc(p.patentType || '')}</td><td><span style="font-size:11px;color:#888">${esc(p.source || '')}</span></td></tr>`;
+        html += `<td>${badgeHtml(d)}<\/td><td style="font-weight:600;color:${colorVal(d)}">${daysStr(d)}<\/td>`;
+        html += `<td class="col-id">${esc(p.applyId || '')}<\/td><td class="col-title" title="${esc(p.title || '')}">${esc((p.title || '').substring(0, 60))}<\/td>`;
+        html += `<td>${esc(p.applyDate || '')}<\/td><td>${esc(p.pubDate || '')}<\/td><td>${esc(p.expiryDate || '')}<\/td>`;
+        html += `<td title="${esc(p.inventor || '')}">${esc((p.inventor || '').substring(0, 14))}<\/td>`;
+        html += `<td class="col-agency" title="${esc(p.patentAgency || '')}">${esc((p.patentAgency || '').substring(0, 18))}<\/td>`;
+        html += `<td>${esc(p.patentType || '')}<\/td><td><span style="font-size:11px;color:#888">${esc(p.source || '')}<\/span><\/td>`;
+        html += `<\/tr>`;
     });
     tbody.innerHTML = html;
 }
@@ -419,6 +420,128 @@ function handleClean() {
     });
 }
 
+// ======================== 导出 Excel ========================
+async function handleExportExcel() {
+    if (!DATA.length) {
+        addMessage('暂无数据可导出', 'warning');
+        return;
+    }
+    addMessage('正在生成 Excel 文件...', 'info', 2000);
+    try {
+        const result = await window.electronAPI.exportToExcel(DATA);
+        if (result.success) {
+            addMessage(`导出成功！文件保存至: ${result.filepath}`, 'success', 0);
+        } else {
+            addMessage(`导出失败: ${result.error}`, 'error');
+        }
+    } catch (err) {
+        addMessage(`导出失败: ${err.message}`, 'error');
+    }
+}
+
+// ======================== 手动导入数据功能 ========================
+function renderTree(node, container, level = 0) {
+    const div = document.createElement('div');
+    div.style.marginLeft = `${level * 20}px`;
+    const icon = node.type === 'dir' ? '📁' : '📄';
+    const nameSpan = document.createElement('span');
+    nameSpan.innerHTML = `${icon} ${escapeHtml(node.name)}`;
+    
+    if (node.type === 'dir' && node.children && node.children.length) {
+        const toggle = document.createElement('span');
+        toggle.textContent = ' ▼ ';
+        toggle.style.cursor = 'pointer';
+        toggle.style.display = 'inline-block';
+        toggle.style.width = '24px';
+        toggle.onclick = (e) => {
+            e.stopPropagation();
+            const childContainer = div.querySelector('.tree-children');
+            if (childContainer) {
+                const isHidden = childContainer.style.display === 'none';
+                childContainer.style.display = isHidden ? 'block' : 'none';
+                toggle.textContent = isHidden ? ' ▼ ' : ' ▶ ';
+            }
+        };
+        div.appendChild(toggle);
+        div.appendChild(nameSpan);
+        
+        const childContainer = document.createElement('div');
+        childContainer.className = 'tree-children';
+        for (const child of node.children) {
+            renderTree(child, childContainer, level + 1);
+        }
+        div.appendChild(childContainer);
+    } else {
+        const spacer = document.createElement('span');
+        spacer.style.display = 'inline-block';
+        spacer.style.width = '24px';
+        div.appendChild(spacer);
+        div.appendChild(nameSpan);
+    }
+    container.appendChild(div);
+}
+
+async function showManualImportDialog() {
+    const { ignore } = await window.electronAPI.getManualImportIgnore();
+    if (ignore) {
+        await window.electronAPI.openTempFolder();
+        return;
+    }
+    
+    const { success, tree, error } = await window.electronAPI.getTempDataStructure();
+    if (!success) {
+        addMessage(`无法获取目录结构: ${error}`, 'error');
+        await window.electronAPI.openTempFolder();
+        return;
+    }
+    
+    const modal = document.getElementById('manualImportModal');
+    if (!modal) return;
+    
+    // 渲染目录树
+    const container = document.getElementById('treeContainer');
+    if (container) {
+        container.innerHTML = '';
+        if (tree && tree.name) {
+            renderTree(tree, container);
+        } else {
+            container.innerHTML = '<span style="color:#999;">目录为空或无法读取</span>';
+        }
+    }
+    
+    // 同步复选框状态
+    const { ignore: currentIgnore } = await window.electronAPI.getManualImportIgnore();
+    const chk = document.getElementById('dontShowAgainCheckbox');
+    if (chk) chk.checked = currentIgnore;
+    
+    modal.classList.add('show');
+}
+
+// 绑定模态框按钮事件（一次性）
+function bindManualImportModalEvents() {
+    const modal = document.getElementById('manualImportModal');
+    if (!modal) return;
+    const closeBtn = document.getElementById('closeManualImportModal');
+    const cancelBtn = document.getElementById('cancelManualImportBtn');
+    const openBtn = document.getElementById('openFolderBtn');
+    const chk = document.getElementById('dontShowAgainCheckbox');
+    
+    if (closeBtn) closeBtn.onclick = () => modal.classList.remove('show');
+    if (cancelBtn) cancelBtn.onclick = () => modal.classList.remove('show');
+    if (openBtn) {
+        openBtn.onclick = async () => {
+            await window.electronAPI.openTempFolder();
+            if (chk && chk.checked) {
+                await window.electronAPI.setManualImportIgnore(true);
+            }
+            modal.classList.remove('show');
+        };
+    }
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.classList.remove('show');
+    });
+}
+
 // ======================== 事件监听 ========================
 function setupEventListeners() {
     window.electronAPI.onCrawlerStatus(async (status) => {
@@ -430,7 +553,7 @@ function setupEventListeners() {
                 const newMsg = oldMsg
                     ? await replaceMessage(oldMsg, status.message, 'info', 0)
                     : addMessage(status.message, 'info', 0);
-                msgMap.set(status.name, newMsg);  // 关键：更新 Map 为新消息
+                msgMap.set(status.name, newMsg);
             } else if (status.status === 'completed') {
                 const oldMsg = msgMap.get(status.name);
                 if (oldMsg) {
@@ -456,10 +579,9 @@ function setupEventListeners() {
             } else {
                 addMessage(`❌ ${status.message}`, 'error', 0);
             }
-            // 不再自动刷新数据，用户需手动刷新或清洗
             document.getElementById('btnCrawl').disabled = false;
             document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
-                }
+        }
     });
 
     window.electronAPI.onCleaningStatus(async (status) => {
@@ -489,7 +611,9 @@ function setupEventListeners() {
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('clearAllMessagesBtn').addEventListener('click', clearAllMessages);
     setupEventListeners();
+    bindManualImportModalEvents();
     loadData();
+    
     let st;
     document.getElementById('searchInput').addEventListener('input', () => {
         clearTimeout(st);
@@ -505,6 +629,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('detailModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeDetail(); });
     document.getElementById('closeModalBtn').addEventListener('click', closeDetail);
+    
+    const manualBtn = document.getElementById('btnManualImport');
+    if (manualBtn) manualBtn.addEventListener('click', showManualImportDialog);
+    
+    const exportBtn = document.getElementById('btnExport');
+    if (exportBtn) exportBtn.addEventListener('click', handleExportExcel);
+    
     setInterval(() => {
         document.getElementById('liveClock').textContent = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-');
     }, 1000);

@@ -7,7 +7,6 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<!-- 顶部导航栏 -->
 <header class="app-header">
   <div class="header-left">
     <h1>📊 专利监控看板</h1>
@@ -19,16 +18,15 @@
   </div>
 </header>
 
-<!-- 主内容区 -->
 <main class="app-main">
-  <!-- 操作按钮区 -->
   <section class="action-bar">
     <button class="btn btn-primary" id="btnCrawl" onclick="handleCrawl()">🚀 一键爬取</button>
     <button class="btn btn-secondary" id="btnClean" onclick="handleClean()">🧹 一键清洗</button>
     <button class="btn btn-outline" id="btnRefresh" onclick="loadData()">🔄 刷新数据</button>
+    <button class="btn btn-outline" id="btnManualImport">📂 手动导入数据</button>
+    <button class="btn btn-outline" id="btnExport">📎 导出 Excel</button>
   </section>
 
-  <!-- 状态信息区 -->
   <section class="status-bar" id="statusBar">
     <div class="status-item">
       <span class="status-dot idle" id="statusDot"></span>
@@ -37,18 +35,15 @@
     <div class="status-item" id="crawlerDetails" style="display:none;"></div>
     <span id="statusInfo" style="font-size:12px;color:#888;margin-left:auto"></span>
   </section>
-  <!-- 消息列表工具栏 -->
+
   <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
       <span style="font-size: 12px; color: #666;">📋 消息记录</span>
       <button id="clearAllMessagesBtn" class="btn-clear-messages" title="清除所有消息">🗑️ 清空</button>
   </div>
-  <!-- 消息历史列表 -->
   <div id="messageList" class="message-list"></div>
 
-  <!-- 统计卡片 -->
   <section class="stats-bar" id="statsBar"></section>
 
-  <!-- 工具栏 -->
   <div class="toolbar">
     <input type="text" id="searchInput" placeholder="🔍 搜索标题/申请号/发明人/申请人/代理机构...">
     <select id="sortSelect" aria-label="排序">
@@ -58,41 +53,26 @@
       <option value="apply_asc">申请日 ↑</option>
       <option value="title">专利名称 A-Z</option>
     </select>
-    <select id="typeFilter"  aria-label="筛选专利类型"><option value="">全部类型</option></select>
-    <select id="yearFilter"  aria-label="筛选专利年份"><option value="">全部年份</option></select>
+    <select id="typeFilter" aria-label="筛选专利类型"><option value="">全部类型</option></select>
+    <select id="yearFilter" aria-label="筛选专利年份"><option value="">全部年份</option></select>
     <span id="matchInfo" style="font-size:12px;color:#888;margin-left:auto"></span>
   </div>
 
-  <!-- 标签切换 -->
   <div class="tabs">
     <button class="tab-btn active" data-tab="table">📋 列表</button>
     <button class="tab-btn" data-tab="chart">📊 图表分析</button>
   </div>
 
-  <!-- 列表面板 -->
   <div class="panel" id="tab-table">
     <table>
       <thead>
-        <tr>
-          <th style="width:60px">状态</th>
-          <th style="width:80px">剩余天数</th>
-          <th style="width:90px">申请号</th>
-          <th>专利名称</th>
-          <th style="width:100px">申请日</th>      <!-- 原来是85px，改为100px -->
-          <th style="width:100px">公开日</th>      <!-- 原来是85px，改为100px -->
-          <th style="width:90px">到期日</th>
-          <th style="width:100px">发明人</th>
-          <th style="width:120px">代理机构</th>
-          <th style="width:80px">类型</th>         <!-- 原来是60px，改为80px -->
-          <th style="width:100px">数据来源</th>
-        </tr>
+        <tr><th style="width:60px">状态</th><th style="width:80px">剩余天数</th><th style="width:90px">申请号</th><th>专利名称</th><th style="width:100px">申请日</th><th style="width:100px">公开日</th><th style="width:90px">到期日</th><th style="width:100px">发明人</th><th style="width:120px">代理机构</th><th style="width:80px">类型</th><th style="width:100px">数据来源</th></tr>
       </thead>
       <tbody id="tableBody"></tbody>
     </table>
-    <div class="no-data" id="noDataMsg" style="display:none;text-align:center;padding:60px;color:#bbb;font-size:15px">没有匹配的专利</div>
+    <div class="no-data" id="noDataMsg" style="display:none;text-align:center;padding:60px;color:#bbb;">没有匹配的专利</div>
   </div>
 
-  <!-- 图表面板 -->
   <div class="panel" id="tab-chart" style="display:none">
     <div class="chart-grid">
       <div class="chart-box"><h3>🗓️ 过期风险分布</h3><div id="pieChart"></div></div>
@@ -109,6 +89,35 @@
     <button class="close-modal" id="closeModalBtn">&times;</button>
     <h2 id="detailTitle"></h2>
     <div id="detailBody"></div>
+  </div>
+</div>
+
+<!-- 手动导入模态框（静态HTML） -->
+<div class="modal-overlay" id="manualImportModal">
+  <div class="modal" style="width: 750px; max-width: 90vw;">
+    <button class="close-modal" id="closeManualImportModal">&times;</button>
+    <h2>📂 手动导入数据</h2>
+    <div style="max-height: 450px; overflow-y: auto; margin: 16px 0;">
+      <div style="background: #e6f7ff; padding: 12px; border-radius: 8px; margin-bottom: 16px;">
+        <strong>📖 操作指南</strong><br>
+        请将您手动下载的专利数据文件放入以下对应文件夹：<br>
+        • <code>temp_data/中国专利公布公告网/</code> ← 放置 .csv 文件（示例：<strong>专利数据_v2_20260525_170653.csv（爬虫生成）</strong>）<br>
+        • <code>temp_data/天眼查/</code> ← 放置 .xlsx 文件（示例：<strong>【天眼查】专利信息-国网四川省电力公司内江供电公司(0520W99052099661779262459497).xlsx</strong>）<br>
+        • <code>temp_data/专利检索及分析网/</code> ← 放置 .xlsx 文件（示例：<strong>文件下载_8e14c196519f4daaa57bbfd1836fe144（需要解压）.xlsx</strong>）<br>
+        放置完成后，点击 <strong>“一键清洗”</strong> 按钮即可融合数据。
+      </div>
+      <div style="background: #f9f9f9; padding: 12px; border-radius: 8px;">
+        <strong>📁 当前目录结构：</strong>
+        <div id="treeContainer" style="margin-top: 10px; font-family: monospace; font-size: 13px;"></div>
+      </div>
+    </div>
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <label style="cursor: pointer;"><input type="checkbox" id="dontShowAgainCheckbox"> 不再提示</label>
+      <div>
+        <button id="openFolderBtn" class="btn btn-primary">📂 打开文件夹</button>
+        <button id="cancelManualImportBtn" class="btn btn-outline">关闭</button>
+      </div>
+    </div>
   </div>
 </div>
 

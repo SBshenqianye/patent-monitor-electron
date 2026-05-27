@@ -7,9 +7,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDataDir: () => ipcRenderer.invoke('get-data-dir'),
     getUserDataDir: () => ipcRenderer.invoke('get-user-data-dir'),
 
-    // 事件监听
     onCrawlerStatus: (callback) => ipcRenderer.on('crawler-status', (event, data) => callback(data)),
     onCleaningStatus: (callback) => ipcRenderer.on('cleaning-status', (event, data) => callback(data)),
-
     removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
+
+    // 手动导入
+    openTempFolder: () => ipcRenderer.invoke('open-temp-folder'),
+    getTempDataDir: () => ipcRenderer.invoke('get-temp-data-dir'),
+    getTempDataStructure: () => ipcRenderer.invoke('get-temp-data-structure'),
+    getManualImportIgnore: () => ipcRenderer.invoke('get-manual-import-ignore'),
+    setManualImportIgnore: (ignore) => ipcRenderer.invoke('set-manual-import-ignore', ignore),
+
+    // 导出 Excel
+    exportToExcel: (data) => ipcRenderer.invoke('export-to-excel', data),
 });

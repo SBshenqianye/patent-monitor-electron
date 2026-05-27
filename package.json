@@ -24,11 +24,15 @@
       {
         "from": "extraResources",
         "to": "extraResources",
-        "filter": ["*.exe"]
+        "filter": [
+          "*.exe"
+        ]
       }
     ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": null,
       "artifactName": "${productName}-${version}-setup.${ext}"
     },
@@ -37,5 +41,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
     }
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
   }
 }
