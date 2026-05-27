@@ -12,8 +12,8 @@ let scriptsDir = null;
 const childProcesses = new Map();
 const loginQueue = [];
 let isLoginInProgress = false;
-const LOGIN_TIMEOUT = 5 * 60 * 1000;      // 登录等待 5 分钟
-const CRAWLER_TIMEOUT = 5 * 60 * 1000;    // 爬虫执行超时 5 分钟
+const LOGIN_TIMEOUT = 5 * 60 * 1000;      // 5 分钟
+const CRAWLER_TIMEOUT = 5 * 60 * 1000;    // 5 分钟
 const loginEvents = new EventEmitter();
 
 // ========== 路径初始化 ==========
@@ -29,10 +29,10 @@ function initPaths() {
 function getScriptPath(scriptName) {
     const pyPath = path.join(scriptsDir, scriptName);
     const exePath = pyPath.replace(/\.py$/, '.exe');
-    return fs.existsSync(exePath) ? exePath : (fs.existsSync(pyPath) ? pyPath : pyPath);
+    return fs.existsSync(exePath) ? exePath : pyPath;
 }
 
-// ========== Python 进程执行（带超时清理） ==========
+// ========== Python 进程执行（带超时） ==========
 function runPythonScript(scriptPath, args = []) {
     return new Promise((resolve, reject) => {
         if (!fs.existsSync(scriptPath)) {
@@ -141,7 +141,7 @@ function hasNewFilesInDataDir(startTime) {
     return scan(dataDir);
 }
 
-// ========== 单个爬虫执行 ==========
+// ========== 单个爬虫 ==========
 async function runCrawler(name, scriptName, requiresLogin) {
     const scriptPath = getScriptPath(scriptName);
     if (!fs.existsSync(scriptPath)) {
@@ -159,7 +159,7 @@ async function runCrawler(name, scriptName, requiresLogin) {
     const startTime = Date.now();
     try {
         const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'crawl']);
-        // 检查脚本输出是否明确成功，或生成了新文件
+        // 判定成功：脚本输出 JSON 中 success=true 或 有新文件
         const lines = result.stdout.trim().split('\n');
         const lastLine = lines[lines.length - 1].trim();
         let scriptSuccess = false;
@@ -185,7 +185,7 @@ async function runAllCrawlers() {
     const crawlerScripts = [
         { name: '爬虫A-专利公告', script: '01_专利过期监控爬虫_v2.py', requiresLogin: false },
         { name: '爬虫B-天眼查', script: '02_天眼查专利导出.py', requiresLogin: true },
-        // 爬虫C 暂未就绪
+        // { name: '爬虫C-CNIPA', script: '03_CNIPA专利导出.py', requiresLogin: true },
     ];
     const promises = crawlerScripts.map(c => runCrawler(c.name, c.script, c.requiresLogin));
     const results = await Promise.allSettled(promises);
@@ -242,8 +242,8 @@ function setupIPC() {
     ipcMain.handle('get-data', () => ({ success: true, data: readCleanedJson() || { patents: [] } }));
     ipcMain.handle('run-all-crawlers', async () => ({ success: true, results: await runAllCrawlers() }));
     ipcMain.handle('run-cleaning', runCleaning);
-    ipcMain.handle('check-login', async () => ({ loggedIn: false })); // 暂未使用
     ipcMain.handle('guide-login', async (event, name) => {
+        // 直接放行队列，实际登录由爬虫脚本内部完成
         loginEvents.emit(`login-done-${name}`);
         sendToRenderer('login-done', { name });
         return { success: true };
