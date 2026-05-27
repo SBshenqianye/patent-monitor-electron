@@ -1,7 +1,9 @@
 # 02_天眼查专利导出.py
 """
-天眼查专利导出爬虫（最终可见版）
-每次运行必定打开可见浏览器窗口，登录流程清晰。
+天眼查专利导出爬虫（登录检测 + 下载捕获优化）
+- 先检查登录态（元素 + cookie），未登录则引导登录
+- 登录后导航到专利页，点击导出，等待下载事件
+- 确保下载文件保存到指定目录
 """
 import os, sys, json, time, logging, argparse
 from pathlib import Path
@@ -13,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 TIANYAN_URL = "https://www.tianyancha.com"
 PATENT_URL = "https://www.tianyancha.com/company/2434381675/zhishi"
-DOWNLOAD_TIMEOUT = 60_000
+DOWNLOAD_TIMEOUT = 30_000  # 点击导出后等待下载 30 秒
+LOGIN_TIMEOUT = 600        # 登录等待 10 分钟
 
 def setup_file_logging(data_dir):
     log_dir = Path(data_dir) / "log" / "天眼查"
@@ -25,10 +28,10 @@ def setup_file_logging(data_dir):
     logger.info(f"日志文件: {log_file}")
 
 def check_login(page):
+    """检查天眼查登录状态（元素 + cookie）"""
     try:
-        logger.info("[登录检查] 正在访问天眼查首页...")
-        page.goto(TIANYAN_URL, wait_until="domcontentloaded", timeout=20000)
-        page.wait_for_timeout(4000)
+        page.goto(TIANYAN_URL, wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_timeout(3000)
         has_element = page.evaluate("() => !!document.querySelector('.tyc-nav-user')")
         cookies = page.context.cookies()
         has_token = any('token' in c['name'].lower() or 'tycid' in c['name'].lower() for c in cookies)
@@ -39,53 +42,67 @@ def check_login(page):
         logger.warning(f"[登录检查] 异常: {e}")
         return False
 
-def wait_for_login(page, timeout=600):
-    logger.info("[登录引导] ========================================")
-    logger.info("[登录引导] 请在弹出的浏览器中完成登录（扫码或账密）")
-    logger.info("[登录引导] 登录成功后脚本将自动继续")
-    logger.info("[登录引导] ========================================")
+def wait_for_login(page, timeout=LOGIN_TIMEOUT):
+    """等待用户完成登录（轮询检测登录元素）"""
+    logger.info("[登录] 请在弹出的浏览器中扫码或输入账号密码登录...")
     start = time.time()
     while time.time() - start < timeout:
         try:
             page.wait_for_timeout(2000)
-            if check_login(page):
+            # 检查是否出现用户菜单
+            has_element = page.evaluate("() => !!document.querySelector('.tyc-nav-user')")
+            if has_element:
+                logger.info("[登录] 登录成功")
                 return True
-        except: pass
-        if int(time.time() - start) % 30 == 0:
-            logger.info(f"[登录引导] 等待中... 剩余约 {int(timeout - (time.time() - start)) // 60} 分钟")
+        except:
+            pass
+        if (time.time() - start) % 30 < 2:
+            remaining = int(timeout - (time.time() - start)) // 60
+            logger.info(f"[登录] 等待中... 剩余约 {remaining} 分钟")
+    logger.warning("[登录] 等待超时")
     return False
 
-def do_crawl(page, output_dir):
-    logger.info("[爬取] 开始专利导出流程...")
-    if not check_login(page):
-        logger.info("[爬取] 未登录，进入引导页面...")
-        page.goto("https://www.tianyancha.com/login", wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(3000)
-        if not wait_for_login(page):
-            return False, None
-        logger.info("[爬取] 登录成功，开始导出")
-
-    logger.info(f"[步骤1] 访问专利页: {PATENT_URL}")
-    page.goto(PATENT_URL, wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_timeout(6000)  # 多等一会确保表格渲染
-
-    logger.info("[步骤2] 点击导出按钮...")
+def export_and_download(page, output_dir):
+    """点击导出按钮，监听下载并保存文件"""
+    logger.info("[导出] 等待导出按钮...")
     export_btn = page.locator('.index_export-button__9ok1s button:has-text("导出")')
     export_btn.wait_for(state="visible", timeout=15000)
+    logger.info("[导出] 点击导出按钮")
     export_btn.click()
 
-    logger.info("[步骤3] 等待下载...")
+    # 使用 expect_download 等待下载事件
+    logger.info(f"[下载] 等待下载事件（最长 {DOWNLOAD_TIMEOUT // 1000} 秒）...")
     try:
         with page.expect_download(timeout=DOWNLOAD_TIMEOUT) as download_info:
-            pass
+            pass  # 下载事件由点击触发
         download = download_info.value
-        dest = os.path.join(output_dir, download.suggested_filename)
+        suggested = download.suggested_filename
+        dest = os.path.join(output_dir, suggested)
         download.save_as(dest)
         logger.info(f"[下载] 文件已保存: {dest}")
         return True, dest
     except PlaywrightTimeout:
-        logger.error("下载超时")
+        logger.error("[下载] 未检测到下载事件")
         return False, None
+
+def do_crawl(page, output_dir):
+    # 1. 确保已登录
+    if not check_login(page):
+        logger.info("[爬取] 未登录，进入登录引导...")
+        page.goto("https://www.tianyancha.com/login", wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(3000)
+        if not wait_for_login(page):
+            return False, None
+        logger.info("[爬取] 登录成功")
+
+    # 2. 导航到专利页面
+    logger.info(f"[步骤1] 访问专利页面: {PATENT_URL}")
+    page.goto(PATENT_URL, wait_until="domcontentloaded", timeout=30000)
+    page.wait_for_timeout(5000)
+
+    # 3. 导出并下载
+    success, file = export_and_download(page, output_dir)
+    return success, file
 
 def main():
     parser = argparse.ArgumentParser()
@@ -109,7 +126,7 @@ def main():
         return
 
     # crawl 动作
-    logger.info("[启动] 正在启动天眼查浏览器窗口，请稍候...")
+    logger.info("[启动] 正在打开天眼查浏览器...")
     with sync_playwright() as p:
         browser = p.chromium.launch_persistent_context(
             user_data_dir=str(USER_DATA_DIR),
@@ -128,8 +145,8 @@ def main():
         else:
             print(json.dumps({"success": False, "error": "导出失败或未登录"}))
 
-        logger.info("[结束] 操作完成，3秒后关闭浏览器...")
-        time.sleep(3)
+        logger.info("[结束] 操作完成，5秒后关闭浏览器...")
+        time.sleep(5)
         browser.close()
 
 if __name__ == "__main__":

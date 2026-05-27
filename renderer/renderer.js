@@ -427,24 +427,26 @@ function setupEventListeners() {
             const msgMap = runningCrawlerMessages;
             if (status.status === 'waiting-login' || status.status === 'running') {
                 const oldMsg = msgMap.get(status.name);
-                if (oldMsg) {
-                    await replaceMessage(oldMsg, status.message, 'info', 0);
-                } else {
-                    const msg = addMessage(status.message, 'info', 0);
-                    msgMap.set(status.name, msg);
-                }
+                const newMsg = oldMsg
+                    ? await replaceMessage(oldMsg, status.message, 'info', 0)
+                    : addMessage(status.message, 'info', 0);
+                msgMap.set(status.name, newMsg);  // 关键：更新 Map 为新消息
             } else if (status.status === 'completed') {
                 const oldMsg = msgMap.get(status.name);
                 if (oldMsg) {
                     await replaceMessage(oldMsg, `${status.name} 完成`, 'success');
                     msgMap.delete(status.name);
-                } else addMessage(`${status.name} 完成`, 'success');
+                } else {
+                    addMessage(`${status.name} 完成`, 'success');
+                }
             } else if (status.status === 'error') {
                 const oldMsg = msgMap.get(status.name);
                 if (oldMsg) {
                     await replaceMessage(oldMsg, `${status.name} 失败: ${status.message}`, 'error', 0);
                     msgMap.delete(status.name);
-                } else addMessage(`${status.name} 失败: ${status.message}`, 'error', 0);
+                } else {
+                    addMessage(`${status.name} 失败: ${status.message}`, 'error', 0);
+                }
             }
         }
         if (status.name === 'all' && status.allDone) {
@@ -460,14 +462,18 @@ function setupEventListeners() {
             if (currentCleaningRunningMsg) await removeMessage(currentCleaningRunningMsg);
             currentCleaningRunningMsg = addMessage('正在清洗数据...', 'info', 0);
         } else if (status.status === 'completed') {
-            if (currentCleaningRunningMsg) { await replaceMessage(currentCleaningRunningMsg, '数据清洗完成', 'success'); currentCleaningRunningMsg = null; }
-            else addMessage('数据清洗完成', 'success');
+            if (currentCleaningRunningMsg) {
+                await replaceMessage(currentCleaningRunningMsg, '数据清洗完成', 'success');
+                currentCleaningRunningMsg = null;
+            } else addMessage('数据清洗完成', 'success');
             loadData();
             document.getElementById('btnClean').disabled = false;
             document.getElementById('btnClean').textContent = '🧹 一键清洗';
         } else if (status.status === 'error') {
-            if (currentCleaningRunningMsg) { await replaceMessage(currentCleaningRunningMsg, `清洗失败: ${status.message}`, 'error', 0); currentCleaningRunningMsg = null; }
-            else addMessage(`清洗失败: ${status.message}`, 'error', 0);
+            if (currentCleaningRunningMsg) {
+                await replaceMessage(currentCleaningRunningMsg, `清洗失败: ${status.message}`, 'error', 0);
+                currentCleaningRunningMsg = null;
+            } else addMessage(`清洗失败: ${status.message}`, 'error', 0);
             document.getElementById('btnClean').disabled = false;
             document.getElementById('btnClean').textContent = '🧹 一键清洗';
         }
