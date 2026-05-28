@@ -449,13 +449,26 @@ function createWindow() {
     // 开发者工具（调试用）
     if (!app.isPackaged) mainWindow.webContents.openDevTools();
 
-    // ========== 修改后的导航拦截 ==========
-    // 只允许本地文件，天眼查和专利检索网链接用外部浏览器打开，其余外部链接阻止
+    // 处理 target="_blank" 链接（例如手动导入弹窗中的外部链接）
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        // 允许天眼查和专利检索网链接用默认浏览器打开
+        if (url.includes('tianyancha.com') || url.includes('pss-system.cponline.cnipa.gov.cn')) {
+            shell.openExternal(url).catch(err => console.error('打开外部链接失败:', err));
+        } else {
+            // 其他所有新窗口请求一律阻止
+            console.log('[主进程] 阻止打开新窗口:', url);
+        }
+        return { action: 'deny' };
+    });
+
+    // 保留原有的导航拦截，防止主框架意外跳转（可选，不影响新窗口）
     mainWindow.webContents.on('will-navigate', (event, url) => {
         if (url.startsWith('file://') || url === 'about:blank') {
-            return; // 允许本地页面导航
+            return;
         }
+        // 如果是白名单链接，不拦截（实际上主框架导航极少发生，但以防万一）
         if (url.includes('tianyancha.com') || url.includes('pss-system.cponline.cnipa.gov.cn')) {
+            // 也不应该让主窗口跳转，还是打开外部浏览器并阻止
             event.preventDefault();
             shell.openExternal(url).catch(err => console.error('打开外部链接失败:', err));
             return;
