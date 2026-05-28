@@ -153,6 +153,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir', required=True)
     parser.add_argument('--action', required=True, choices=['check', 'crawl'])
+    parser.add_argument('--start-minimized', action='store_true', help='启动时最小化浏览器窗口')
     args = parser.parse_args()
     data_dir = Path(args.data_dir)
     setup_file_logging(data_dir)
@@ -163,7 +164,13 @@ def main():
 
     if args.action == 'check':
         with sync_playwright() as p:
-            browser = p.chromium.launch_persistent_context(user_data_dir=str(USER_DATA_DIR), headless=False, viewport={"width":800,"height":600})
+            startup_arg = '--start-minimized' if args.start_minimized else '--start-maximized'
+            browser = p.chromium.launch_persistent_context(
+                user_data_dir=str(USER_DATA_DIR), 
+                headless=False, 
+                no_viewport=True,
+                args=[startup_arg],
+            )
             page = browser.pages[0] if browser.pages else browser.new_page()
             logged_in = check_login(page)
             print(json.dumps({"loggedIn": logged_in}))

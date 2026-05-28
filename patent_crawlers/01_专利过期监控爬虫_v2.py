@@ -279,6 +279,7 @@ def main():
     parser.add_argument('--keywords', help='逗号分隔的关键词列表')
     parser.add_argument('--headless', choices=['true', 'false'], default='false',
                         help='是否使用无头模式（默认false）')
+    parser.add_argument('--start-minimized', action='store_true', help='启动时最小化浏览器窗口')
     args = parser.parse_args()
 
     headless = args.headless.lower() == 'true'
@@ -315,7 +316,7 @@ def main():
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--accept-lang=zh-CN,zh",
-            ],
+            ] + (['--start-minimized'] if args.start_minimized else []),
         )
         context = browser.new_context(
             viewport={"width": 1366, "height": 768},
