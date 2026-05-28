@@ -89,25 +89,34 @@ def wait_for_login(page, timeout=LOGIN_TIMEOUT):
     start = time.time()
     while time.time() - start < timeout:
         try:
-            page.wait_for_timeout(2000)
-            # 检测登录后特有的 span.tyc-nav-user-dropdown-label 且文本非空
+            # 每次循环重新获取 locator，避免 stale 元素
             user_label = page.locator('span.tyc-nav-user-dropdown-label')
+            # 使用 first 前先确保存在，且设置超时很短的 wait_for
             if user_label.count() > 0:
-                # 确保元素可见且有实际文本（不是空字符串）
-                if user_label.first.is_visible():
-                    text = user_label.first.text_content().strip()
-                    if text and text != "登录/注册":
-                        logger.info(f"[登录] 检测到用户菜单: {text} → 登录成功")
-                        return True
-        except Exception:
+                # 捕获元素可能瞬间消失的异常
+                try:
+                    if user_label.first.is_visible(timeout=1000):
+                        text = user_label.first.text_content(timeout=1000).strip()
+                        if text and text != "登录/注册":
+                            logger.info(f"[登录] 检测到用户菜单: {text} → 登录成功")
+                            return True
+                except Exception as inner_e:
+                    # 元素在检查过程中消失，忽略继续等待
+                    logger.debug(f"[登录] 检查时出现短暂异常: {inner_e}")
+                    pass
+        except Exception as e:
+            logger.debug(f"[登录] 轮询异常: {e}")
             pass
+
         # 每30秒提示一次
-        if (time.time() - start) % 30 < 2:
-            remaining = int(timeout - (time.time() - start)) // 60
+        elapsed = time.time() - start
+        if int(elapsed) % 30 < 2:
+            remaining = int(timeout - elapsed) // 60
             logger.info(f"[登录] 等待中... 剩余约 {remaining} 分钟")
+        page.wait_for_timeout(2000)
+
     logger.warning("[登录] 等待超时")
     return False
-
 
 def export_and_download(page, output_dir):
     """点击导出按钮，监听下载并保存文件"""

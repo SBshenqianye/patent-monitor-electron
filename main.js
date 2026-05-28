@@ -449,10 +449,19 @@ function createWindow() {
     // 开发者工具（调试用）
     if (!app.isPackaged) mainWindow.webContents.openDevTools();
 
-    // 阻止导航
+    // ========== 修改后的导航拦截 ==========
+    // 只允许本地文件，天眼查和专利检索网链接用外部浏览器打开，其余外部链接阻止
     mainWindow.webContents.on('will-navigate', (event, url) => {
+        if (url.startsWith('file://') || url === 'about:blank') {
+            return; // 允许本地页面导航
+        }
+        if (url.includes('tianyancha.com') || url.includes('pss-system.cponline.cnipa.gov.cn')) {
+            event.preventDefault();
+            shell.openExternal(url).catch(err => console.error('打开外部链接失败:', err));
+            return;
+        }
         event.preventDefault();
-        console.log('[主进程 will-navigate] 阻止导航');
+        console.log('[主进程] 阻止导航到:', url);
     });
 
     // 允许拖放

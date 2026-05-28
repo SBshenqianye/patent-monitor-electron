@@ -10,6 +10,16 @@ let currentCleaningRunningMsg = null;
 let currentRefreshMsg = null;
 const runningCrawlerMessages = new Map();
 
+
+
+
+// 获取文件扩展名（小写）
+function getFileExtension(filePath) {
+    const lastDot = filePath.lastIndexOf('.');
+    if (lastDot === -1) return '';
+    return filePath.slice(lastDot + 1).toLowerCase();
+}
+
 // ======================== 消息列表管理 ========================
 function addMessage(text, type = 'info', duration = 5000) {
     const container = document.getElementById('messageList');
@@ -611,7 +621,7 @@ function setupEventListeners() {
                 addMessage(` ${status.message}`, 'success', 8000);
                 addMessage('💡 请点击「一键清洗」完成数据融合', 'info', 8000);
             } else {
-                addMessage(`❌ ${status.message}`, 'error', 0);
+                addMessage(`${status.message}`, 'error', 0);
             }
             document.getElementById('btnCrawl').disabled = false;
             document.getElementById('btnCrawl').textContent = '🚀 一键爬取';
@@ -731,11 +741,15 @@ function showDropTargetDialog() {
 }
 
 // ========== 主函数：设置拖拽 ==========
+function getBaseName(filePath) {
+    return filePath.replace(/\\/g, '/').split('/').pop();
+}
+
 function setupDragAndDrop() {
     const dropZone = document.getElementById('dropZone');
     if (!dropZone) return;
 
-    // 1. 全局事件：区域外禁止放置
+    // 全局阻止默认拖放行为
     document.addEventListener('dragenter', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -743,7 +757,7 @@ function setupDragAndDrop() {
     document.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer.dropEffect = 'none';   // 区域外禁止图标
+        e.dataTransfer.dropEffect = 'none';
     });
     document.addEventListener('dragleave', (e) => {
         e.preventDefault();
@@ -755,7 +769,7 @@ function setupDragAndDrop() {
         dropZone.classList.remove('visible', 'drag-over');
     });
 
-    // 2. 显示 / 隐藏拖拽区域
+    // 显示/隐藏拖拽区域
     document.body.addEventListener('dragenter', () => {
         dropZone.classList.add('visible');
     });
@@ -768,12 +782,12 @@ function setupDragAndDrop() {
         dropZone.classList.remove('visible');
     });
 
-    // 3. 区域内高亮
+    // 区域内高亮
     dropZone.addEventListener('dragenter', () => dropZone.classList.add('drag-over'));
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer.dropEffect = 'copy';   // 区域内允许复制
+        e.dataTransfer.dropEffect = 'copy';
         dropZone.classList.add('drag-over');
     });
     dropZone.addEventListener('dragleave', (e) => {
@@ -782,7 +796,7 @@ function setupDragAndDrop() {
         }
     });
 
-    // 4. 区域内 drop 事件：获取文件路径并导入（自动识别 + 手动选择）
+    // 核心：drop 事件处理（允许混合文件类型）
     dropZone.addEventListener('drop', async (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -792,63 +806,64 @@ function setupDragAndDrop() {
         if (files.length === 0) return;
 
         const filePaths = files.map(f => f.path).filter(Boolean);
-        console.log('[drop] 文件路径：', filePaths);
-
         if (filePaths.length === 0) {
             addMessage('无法获取文件路径，请使用手动导入', 'warning');
             return;
         }
 
-        let target = determineTargetFolder(filePaths);
-        if (!target) {
-            target = await showDropTargetDialog();
+        let successCount = 0;
+        let failCount = 0;
+        const skipList = [];
+
+        for (const filePath of filePaths) {
+            let target = determineTargetFolder([filePath]);
             if (!target) {
-                addMessage('取消导入', 'info');
-                return;
+                skipList.push(getBaseName(filePath));
+                continue;
+            }
+            try {
+                const result = await window.electronAPI.importFiles([filePath], target);
+                if (result.success) successCount++;
+                else failCount++;
+            } catch (err) {
+                failCount++;
             }
         }
 
-        addMessage(`正在导入 ${filePaths.length} 个文件到“${target}”...`, 'info');
-        try {
-            const result = await window.electronAPI.importFiles(filePaths, target);
-            if (result.success) {
-                addMessage(`导入成功！建议运行「一键清洗」`, 'success', 0);
-            } else {
-                addMessage(`导入失败: ${result.error}`, 'error', 0);
-            }
-        } catch (err) {
-            addMessage(`导入异常: ${err.message}`, 'error');
-        }
+        if (successCount > 0) addMessage(`成功导入 ${successCount} 个文件，建议运行「一键清洗」`, 'success', 0);
+        if (failCount > 0) addMessage(`失败 ${failCount} 个文件，请检查文件是否可读或手动导入`, 'error', 0);
+        if (skipList.length > 0) addMessage(`跳过无法识别的文件: ${skipList.join(', ')}`, 'warning', 5000);
     });
 
-    // 5. 备用：主进程 drop-file 发来的路径（同样支持自动+手动）
+    // IPC 拖放处理
     window.electronAPI.onDroppedFiles(async (filePaths) => {
-        console.log('[IPC] 收到文件路径：', filePaths);
         if (!filePaths || filePaths.length === 0) return;
 
-        let target = determineTargetFolder(filePaths);
-        if (!target) {
-            target = await showDropTargetDialog();
+        let successCount = 0;
+        let failCount = 0;
+        const skipList = [];
+
+        for (const filePath of filePaths) {
+            let target = determineTargetFolder([filePath]);
             if (!target) {
-                addMessage('取消导入', 'info');
-                return;
+                skipList.push(getBaseName(filePath));
+                continue;
+            }
+            try {
+                const result = await window.electronAPI.importFiles([filePath], target);
+                if (result.success) successCount++;
+                else failCount++;
+            } catch (err) {
+                failCount++;
             }
         }
 
-        addMessage(`正在导入 ${filePaths.length} 个文件到“${target}”...`, 'info');
-        try {
-            const result = await window.electronAPI.importFiles(filePaths, target);
-            if (result.success) {
-                addMessage(`导入成功！建议运行「一键清洗」`, 'success', 0);
-            } else {
-                addMessage(`导入失败: ${result.error}`, 'error', 0);
-            }
-        } catch (err) {
-            addMessage(`导入异常: ${err.message}`, 'error');
-        }
+        if (successCount > 0) addMessage(`成功导入 ${successCount} 个文件，建议运行「一键清洗」`, 'success', 0);
+        if (failCount > 0) addMessage(`失败 ${failCount} 个文件`, 'error', 0);
+        if (skipList.length > 0) addMessage(`跳过无法识别的文件: ${skipList.join(', ')}`, 'warning', 5000);
     });
 
-    // 6. 启动提示动画
+    // 启动提示动画
     setTimeout(() => {
         dropZone.classList.add('visible');
         setTimeout(() => dropZone.classList.remove('visible'), 2000);
