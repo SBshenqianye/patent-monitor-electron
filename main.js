@@ -351,7 +351,19 @@ function setupIPC() {
         writeUserConfig(config);
         return { success: true };
     });
+    // 在 setupIPC() 函数内，原有的手动导入 IPC 之后添加
 
+    // 使用教程弹窗
+    ipcMain.handle('get-tutorial-ignore', () => {
+        const config = readUserConfig();
+        return { ignore: config.tutorialIgnore === true };
+    });
+    ipcMain.handle('set-tutorial-ignore', (event, ignore) => {
+        const config = readUserConfig();
+        config.tutorialIgnore = ignore;
+        writeUserConfig(config);
+        return { success: true };
+    });
     // 导出 Excel
     ipcMain.handle('export-to-excel', async (event, data) => {
         if (!data || !data.length) {

@@ -126,6 +126,51 @@
   </div>
 </div>
 
+<!-- 使用教程模态框 -->
+<div class="modal-overlay" id="tutorialModal">
+  <div class="modal" style="width: 750px; max-width: 90vw;">
+    <button class="close-modal" id="closeTutorialModal">&times;</button>
+    <h2>📖 使用教程 & 注意事项</h2>
+    <div style="max-height: 450px; overflow-y: auto; margin: 16px 0;">
+      <div style="background:#f0f7ff; padding:12px 16px; border-radius:8px; margin-bottom:16px;">
+        <h3>🚀 快速上手</h3>
+        <ol style="padding-left: 24px; margin: 0; list-style-position: outside;">
+          <li>点击 <strong>「一键爬取」</strong> 自动从两个数据源（中国专利公布公告网、天眼查）抓取最新专利数据。<br/>
+              <small>（注：专利检索及分析网爬虫暂未完成，可手动导入）</small></li>
+          <li>如需手动导入数据，点击 <strong>「手动导入数据」</strong> 并按指引放入文件。</li>
+          <li>点击 <strong>「一键清洗」</strong> 融合多源数据并更新看板。</li>
+          <li>在表格中点击任意行查看详情，切换至图表页查看分析。</li>
+        </ol>
+      </div>
+      <div style="background:#fffbe6; padding:12px 16px; border-radius:8px; margin-bottom:16px;">
+        <h3>⚠️ 注意事项</h3>
+        <ul style="padding-left: 24px; margin: 0; list-style-position: outside;">
+          <li>部分网站需要登录（天眼查），脚本会弹出浏览器窗口等待您手动登录。</li>
+          <li>爬取过程中请勿关闭弹出的浏览器窗口，否则会导致失败。</li>
+          <li>若网络不稳定或网站改版，爬虫可能失败，请使用手动导入作为备用方案。</li>
+          <li>数据清洗后会自动生成结果文件，原始下载文件不会丢失。</li>
+          <li>导出 Excel 功能需要手动点击按钮，文件保存在程序根目录下的 output 文件夹。</li>
+          <li>用户设置（如“不再提示”等）保存在 <code>userConfig.json</code> 中，位于程序数据目录（可在主进程日志中查看具体路径）。</li>
+        </ul>
+      </div>
+      <div style="background:#f0faf0; padding:12px 16px; border-radius:8px;">
+        <h3>💡 小技巧</h3>
+        <ul style="padding-left: 24px; margin: 0; list-style-position: outside;">
+          <li>可点击统计卡片快速筛选过期、即将到期等专利。</li>
+          <li>表格支持多关键字搜索，可联合筛选类型和年份。</li>
+          <li>剩余天数自动更新，10秒刷新一次。</li>
+        </ul>
+      </div>
+    </div>
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <label style="cursor: pointer;">
+        <input type="checkbox" id="tutorialDontShowAgainCheckbox"> 不再提示
+      </label>
+      <button id="confirmTutorialBtn" class="btn btn-primary">知道了</button>
+    </div>
+  </div>
+</div>
+
 <script src="renderer.js"></script>
 </body>
 </html>

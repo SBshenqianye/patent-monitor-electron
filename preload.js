@@ -20,4 +20,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 导出 Excel
     exportToExcel: (data) => ipcRenderer.invoke('export-to-excel', data),
+
+    // 使用教程弹窗
+    getTutorialIgnore: () => ipcRenderer.invoke('get-tutorial-ignore'),
+    setTutorialIgnore: (ignore) => ipcRenderer.invoke('set-tutorial-ignore', ignore),
 });

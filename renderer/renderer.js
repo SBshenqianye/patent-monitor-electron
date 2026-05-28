@@ -646,6 +646,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('clearAllMessagesBtn').addEventListener('click', clearAllMessages);
     setupEventListeners();
     bindManualImportModalEvents();
+    bindTutorialModalEvents();  // 绑定教程弹窗事件
+    showTutorialDialog();       // 检查并显示教程弹窗（如果未忽略）
     loadData();
     
     let st;
@@ -678,6 +680,40 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentTab === 'chart') renderCharts();
     }, 10000);
 });
+
+// ======================== 使用教程弹窗 ========================
+async function showTutorialDialog() {
+    const { ignore } = await window.electronAPI.getTutorialIgnore();
+    if (ignore) return; // 已勾选不再提示，直接返回
+
+    const modal = document.getElementById('tutorialModal');
+    if (!modal) return;
+    modal.classList.add('show');
+    document.body.style.overflow = 'hidden'; // ✅ 禁止背景滚动
+}
+
+function bindTutorialModalEvents() {
+    const modal = document.getElementById('tutorialModal');
+    if (!modal) return;
+
+    const closeBtn = document.getElementById('closeTutorialModal');
+    const confirmBtn = document.getElementById('confirmTutorialBtn');
+    const chk = document.getElementById('tutorialDontShowAgainCheckbox');
+
+    function closeTutorial() {
+        if (chk && chk.checked) {
+            window.electronAPI.setTutorialIgnore(true);
+        }
+        modal.classList.remove('show');
+        document.body.style.overflow = ''; // ✅ 恢复背景滚动
+    }
+
+    if (closeBtn) closeBtn.onclick = closeTutorial;
+    if (confirmBtn) confirmBtn.onclick = closeTutorial;
+
+    // ❌ 不再监听遮罩层点击，用户必须通过按钮或 X 关闭
+    // modal.addEventListener('click', (e) => { ... });
+}
 
 window.handleCrawl = handleCrawl;
 window.handleClean = handleClean;
