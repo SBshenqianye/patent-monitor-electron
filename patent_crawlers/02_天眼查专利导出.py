@@ -9,7 +9,10 @@ import os, sys, json, time, logging, argparse
 from pathlib import Path
 from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-
+try:
+    from playwright.sync_api import TargetClosedError
+except ImportError:
+    TargetClosedError = None
 
 # ============================ 打包环境 Playwright 路径修复 ============================
 def fix_playwright_path():
@@ -130,22 +133,30 @@ def export_and_download(page, output_dir):
         return False, None
 
 def do_crawl(page, output_dir):
-    # 1. 确保已登录
-    if not check_login(page):
-        logger.info("[爬取] 未登录，进入登录引导...")
-        page.goto("https://www.tianyancha.com/login", wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(3000)
-        if not wait_for_login(page):
+    try:
+        # 1. 确保已登录
+        if not check_login(page):
+            logger.info("[爬取] 未登录，进入登录引导...")
+            page.goto("https://www.tianyancha.com/login", wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(3000)
+            if not wait_for_login(page):
+                return False, None
+            logger.info("[爬取] 登录成功")
+
+        # 2. 导航到专利页面
+        logger.info(f"[步骤1] 访问专利页面: {PATENT_URL}")
+        page.goto(PATENT_URL, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(5000)
+
+        # 3. 导出并下载
+        success, file = export_and_download(page, output_dir)
+    except TargetClosedError:
+        logger.error("浏览器被手动关闭")
+        return False, None
+    except Exception as e:
+        if "Target closed" in str(e) or "Browser closed" in str(e):
+            logger.error("浏览器被手动关闭")
             return False, None
-        logger.info("[爬取] 登录成功")
-
-    # 2. 导航到专利页面
-    logger.info(f"[步骤1] 访问专利页面: {PATENT_URL}")
-    page.goto(PATENT_URL, wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_timeout(5000)
-
-    # 3. 导出并下载
-    success, file = export_and_download(page, output_dir)
     return success, file
 
 def main():

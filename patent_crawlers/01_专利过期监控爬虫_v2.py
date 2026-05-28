@@ -22,6 +22,10 @@ import argparse
 import json
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+try:
+    from playwright.sync_api import TargetClosedError
+except ImportError:
+    TargetClosedError = None
 
 # ============================ 打包环境 Playwright 路径修复 ============================
 def fix_playwright_path():
@@ -422,7 +426,10 @@ def main():
                     except Exception as e:
                         logger.warning(f"翻页异常: {e}")
                         break
-
+        except TargetClosedError:
+            logger.error("浏览器被手动关闭")
+            print(json.dumps({"success": False, "error": "浏览器被手动关闭，爬取失败"}))
+            return
         except PlaywrightTimeout as e:
             logger.error(f"页面加载超时: {e}")
         except Exception as e:
