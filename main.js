@@ -440,38 +440,52 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            // 确保拖放功能开启（可选，默认开启）
             disableHtml5DragAndDrop: false,
         },
-        // 使用标准窗口边框（支持拖放事件）
         frame: true,
         titleBarStyle: 'default',
         title: '专利监控看板',
     });
 
-    // ===== 拖放事件处理（顺序无关，但建议放在 loadFile 前） =====
+    // 强制打开开发者工具（打包后也打开，便于调试）
+    mainWindow.webContents.openDevTools();
 
-    // 阻止拖放文件时窗口跳转到该文件
+    // 阻止导航
     mainWindow.webContents.on('will-navigate', (event, url) => {
         event.preventDefault();
+        console.log('[主进程 will-navigate] 已阻止导航');
     });
 
-    // 允许 HTML5 拖放（阻止浏览器默认行为）
+    // 允许拖放
     mainWindow.webContents.on('will-prevent-default', (event) => {
         event.preventDefault();
+        console.log('[主进程 will-prevent-default] 事件触发');
     });
 
-    // 获取拖入的文件路径（核心事件）
+    // 核心：获取拖放文件路径
     mainWindow.on('drop-file', (event, filePaths) => {
         event.preventDefault();
-        console.log('[主进程 drop-file] 检测到文件拖放，路径：', filePaths);
+        console.log('[主进程 drop-file] !!! 检测到文件拖放，路径：', filePaths);
+
+        // 同时发送给渲染进程
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('dropped-files', filePaths);
+
+            // 尝试在渲染进程控制台打印消息（用于确认事件已到达）
+            mainWindow.webContents.executeJavaScript(`
+                console.log('[主进程→渲染] 已通过 IPC 发送文件路径：', ${JSON.stringify(filePaths)});
+            `).catch(err => console.error('executeJavaScript 失败:', err));
         }
     });
 
+    // 额外监听 open-file (macOS 或某些情况)
+    app.on('open-file', (event, path) => {
+        event.preventDefault();
+        console.log('[主进程 open-file] 文件打开:', path);
+    });
+
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-    if (!app.isPackaged) mainWindow.webContents.openDevTools();
+
     mainWindow.on('closed', () => { mainWindow = null; });
 }
 

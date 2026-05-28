@@ -685,12 +685,18 @@ document.addEventListener('DOMContentLoaded', () => {
 function setupDragAndDrop() {
     const dropZone = document.getElementById('dropZone');
     if (!dropZone) return;
+    console.log('[渲染] 拖拽区域已初始化');
 
-    // ===== 1. 全局阻止默认，区域外禁止放置 =====
+    // 给子元素设置 pointer-events: none 避免闪烁
+    dropZone.style.pointerEvents = 'auto';
+    const children = dropZone.querySelectorAll('*');
+    children.forEach(child => child.style.pointerEvents = 'none');
+
+    // 全局禁止默认，区域外禁止
     document.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer.dropEffect = 'none';   // 区域外禁止
+        e.dataTransfer.dropEffect = 'none';
     });
     document.addEventListener('dragenter', (e) => {
         e.preventDefault();
@@ -703,64 +709,97 @@ function setupDragAndDrop() {
     document.addEventListener('drop', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        console.log('[渲染 document.drop] 事件触发');
         dropZone.classList.remove('visible');
     });
 
-    // ===== 2. 进入/离开窗口控制区域显示 =====
+    // 显示/隐藏拖拽区域
     document.body.addEventListener('dragenter', () => {
         dropZone.classList.add('visible');
+        console.log('[渲染] dragenter 窗口，显示拖拽区域');
     });
     document.body.addEventListener('dragleave', (e) => {
-        // 只有真正离开窗口才隐藏（避免子元素干扰）
         if (!e.relatedTarget || e.relatedTarget === document.documentElement) {
             dropZone.classList.remove('visible');
             dropZone.classList.remove('drag-over');
+            console.log('[渲染] dragleave 窗口，隐藏区域');
         }
     });
     document.body.addEventListener('drop', () => {
         dropZone.classList.remove('visible');
     });
 
-    // ===== 3. 区域内事件（禁止子元素触发，消除闪烁） =====
-    // 在 dropZone 上设置 pointer-events 样式：让子元素不响应拖放事件
-    dropZone.style.pointerEvents = 'auto';
-    // 给所有子元素设置 pointer-events: none，使事件直接冒泡到 dropZone
-    const children = dropZone.querySelectorAll('*');
-    children.forEach(child => child.style.pointerEvents = 'none');
-
-    // 高亮只在 dragover 时添加
+    // 区域内事件
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect = 'copy';
         dropZone.classList.add('drag-over');
     });
-
-    // 离开区域时移除高亮（不依赖 relatedTarget 的子元素判断，因为子元素事件已屏蔽）
     dropZone.addEventListener('dragleave', () => {
         dropZone.classList.remove('drag-over');
     });
 
-    // 区域内 drop：只隐藏区域，不处理文件
+    // 重点：drop 事件中尝试获取文件
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         e.stopPropagation();
         dropZone.classList.remove('drag-over', 'visible');
+        console.log('[渲染 dropZone.drop] 事件触发');
+
+        // 打印文件对象
+        console.log('[渲染 dropZone.drop] dataTransfer.files:', e.dataTransfer.files);
+        console.log('[渲染 dropZone.drop] files 数量:', e.dataTransfer.files.length);
+
+        // 尝试使用 webUtils 获取路径
+        const files = [...e.dataTransfer.files];
+        const filePaths = files.map(f => {
+            try {
+                const path = window.electronAPI.getFilePath(f);
+                console.log('[渲染] getFilePath 结果:', path);
+                return path;
+            } catch (err) {
+                console.error('[渲染] getFilePath 异常:', err);
+                return null;
+            }
+        }).filter(Boolean);
+
+        console.log('[渲染] 获取到的有效路径:', filePaths);
+        addMessage(`[调试] 拖放文件数: ${files.length}，路径获取成功: ${filePaths.length}`, 'info', 0);
+
+        // 如果获取到了路径，直接尝试导入（不再依赖主进程 IPC 路径）
+        if (filePaths.length > 0) {
+            (async () => {
+                const target = await askTargetFolder();
+                if (!target) return;
+                addMessage(`正在导入 ${filePaths.length} 个文件到“${target}”...`, 'info');
+                try {
+                    const result = await window.electronAPI.importFiles(filePaths, target);
+                    if (result.success) {
+                        addMessage(`导入成功！共复制 ${result.count} 个文件。建议清洗`, 'success', 0);
+                    } else {
+                        addMessage(`导入失败: ${result.error}`, 'error', 0);
+                    }
+                } catch (err) {
+                    addMessage(`导入异常: ${err.message}`, 'error');
+                }
+            })();
+        }
     });
 
-    // ===== 4. 接收主进程发来的文件路径，执行导入 =====
+    // 主进程 IPC 备用（如果主进程 drop-file 触发了）
     window.electronAPI.onDroppedFiles(async (filePaths) => {
-        console.log('[渲染] 收到文件路径:', filePaths);
-        if (!filePaths || filePaths.length === 0) return;
-
+        console.log('[渲染] 收到主进程 dropped-files:', filePaths);
+        addMessage(`[IPC] 收到文件路径: ${filePaths.length} 个`, 'info', 0);
+        // 主进程路径优先
+        if (!filePaths.length) return;
         const target = await askTargetFolder();
         if (!target) return;
-
-        addMessage(`正在导入 ${filePaths.length} 个文件到“${target}”...`, 'info');
+        addMessage(`正在导入 ${filePaths.length} 个文件...`, 'info');
         try {
             const result = await window.electronAPI.importFiles(filePaths, target);
             if (result.success) {
-                addMessage(`导入成功！共复制 ${result.count} 个文件。建议运行「一键清洗」更新数据`, 'success', 0);
+                addMessage(`导入成功！共复制 ${result.count} 个文件。建议清洗`, 'success', 0);
             } else {
                 addMessage(`导入失败: ${result.error}`, 'error', 0);
             }
@@ -769,7 +808,7 @@ function setupDragAndDrop() {
         }
     });
 
-    // ===== 5. 启动提示 =====
+    // 启动提示
     setTimeout(() => {
         dropZone.classList.add('visible');
         setTimeout(() => dropZone.classList.remove('visible'), 2000);
