@@ -184,140 +184,166 @@ def read_publish_csv(folder):
     if not files:
         logger.warning("未找到 CSV 文件")
         return []
-    latest = max(files, key=os.path.getmtime)
-    logger.info(f"读取: {os.path.basename(latest)}")
-    records = []
-    with open(latest, 'r', encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            raw_id = row.get('申请号', '')
-            aid = normalize_apply_id(raw_id)
-            if not aid:
-                continue
-            addr_raw = row.get('地址', '')
-            addr, cls, agency, agent, abstract = parse_address_field(addr_raw)
-            raw_title = row.get('标题', '')
-            title = re.sub(r'^\[.*?\]\s*', '', raw_title)
-            records.append({
-                'applyId': aid,
-                'title': clean_title(title),
-                'applicant': re.sub(r'\s+', ' ', row.get('申请人', '').strip()),
-                'inventor': clean_inventor(row.get('发明人', '')),
-                'address': addr,
-                'classification': cls,
-                'patentAgency': agency,
-                'patentAgent': agent,
-                'abstract': abstract,
-                'applyDate': parse_apply_date(row.get('申请日', '')),
-                'pubDate': parse_apply_date(row.get('公开（公告）日', '')),
-                'source': '中国专利公布公告',
-            })
-    return records
+    all_records = []
+    for f in files:
+        logger.info(f"读取: {os.path.basename(f)}")
+        with open(f, 'r', encoding='utf-8-sig') as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                raw_id = row.get('申请号', '')
+                aid = normalize_apply_id(raw_id)
+                if not aid:
+                    continue
+                # ... 原有解析逻辑，保持不变
+                addr_raw = row.get('地址', '')
+                addr, cls, agency, agent, abstract = parse_address_field(addr_raw)
+                raw_title = row.get('标题', '')
+                title = re.sub(r'^\[.*?\]\s*', '', raw_title)
+                all_records.append({
+                    'applyId': aid,
+                    'title': clean_title(title),
+                    'applicant': re.sub(r'\s+', ' ', row.get('申请人', '').strip()),
+                    'inventor': clean_inventor(row.get('发明人', '')),
+                    'address': addr,
+                    'classification': cls,
+                    'patentAgency': agency,
+                    'patentAgent': agent,
+                    'abstract': abstract,
+                    'applyDate': parse_apply_date(row.get('申请日', '')),
+                    'pubDate': parse_apply_date(row.get('公开（公告）日', '')),
+                    'source': '中国专利公布公告',
+                })
+    return all_records
 
 def read_tianyan_xlsx(folder):
     files = glob(os.path.join(folder, '*.xlsx'))
     if not files:
         logger.warning("未找到 XLSX 文件")
         return []
-    latest = max(files, key=os.path.getmtime)
-    logger.info(f"读取: {os.path.basename(latest)}")
-    wb = openpyxl.load_workbook(latest, data_only=True)
-    ws = wb['专利信息']
-    records = []
-    company_name = ""
-    for row in ws.iter_rows(min_row=6, max_row=6, max_col=1, values_only=True):
-        if row[0]:
-            m = re.search(r'【(.+?)】', str(row[0]))
-            if m:
-                company_name = m.group(1)
-
-    for row in ws.iter_rows(min_row=8, max_row=ws.max_row, values_only=True):
-        if not row[0]:
-            continue
-        raw_id = str(row[4]).strip() if row[4] else ''
-        aid = normalize_apply_id(raw_id)
-        if not aid:
-            continue
-        ptype = str(row[2]).strip() if row[2] else ''
-        mapped_type = '发明' if '发明' in ptype else '实用新型' if '实用' in ptype else '外观设计' if '外观' in ptype else ptype
-        records.append({
-            'applyId': aid,
-            'title': str(row[1]).strip() if row[1] else '',
-            'company': company_name,
-            'patentType': mapped_type,
-            'legalStatus': str(row[3]).strip() if row[3] else '',
-            'applyDate': parse_apply_date(row[5]),
-            'pubId': str(row[6]).strip() if row[6] else '',
-            'pubDate': parse_apply_date(row[7]),
-            'inventor': clean_inventor(row[8]),
-            'source': '天眼查',
-        })
-    wb.close()
-    return records
+    all_records = []
+    for f in files:
+        logger.info(f"读取: {os.path.basename(f)}")
+        wb = openpyxl.load_workbook(f, data_only=True)
+        ws = wb['专利信息']
+        company_name = ""
+        # 取公司名（假设每个文件都是同一家公司，但保留原有逻辑）
+        for row in ws.iter_rows(min_row=6, max_row=6, max_col=1, values_only=True):
+            if row[0]:
+                m = re.search(r'【(.+?)】', str(row[0]))
+                if m:
+                    company_name = m.group(1)
+        for row in ws.iter_rows(min_row=8, max_row=ws.max_row, values_only=True):
+            if not row[0]:
+                continue
+            raw_id = str(row[4]).strip() if row[4] else ''
+            aid = normalize_apply_id(raw_id)
+            if not aid:
+                continue
+            ptype = str(row[2]).strip() if row[2] else ''
+            mapped_type = '发明' if '发明' in ptype else '实用新型' if '实用' in ptype else '外观设计' if '外观' in ptype else ptype
+            all_records.append({
+                'applyId': aid,
+                'title': str(row[1]).strip() if row[1] else '',
+                'company': company_name,
+                'patentType': mapped_type,
+                'legalStatus': str(row[3]).strip() if row[3] else '',
+                'applyDate': parse_apply_date(row[5]),
+                'pubId': str(row[6]).strip() if row[6] else '',
+                'pubDate': parse_apply_date(row[7]),
+                'inventor': clean_inventor(row[8]),
+                'source': '天眼查',
+            })
+        wb.close()
+    return all_records
 
 def read_search_xlsx(folder):
+    """
+    读取“专利检索及分析网”导出的所有 .xlsx 文件，合并返回专利记录列表。
+    支持批量下载的多个文件。
+    """
+    import os
+    from glob import glob
+    import openpyxl
+
     files = glob(os.path.join(folder, '*.xlsx'))
     if not files:
-        logger.warning("未找到 XLSX 文件")
+        logger.warning("[专利检索分析网] 未找到 XLSX 文件")
         return []
-    latest = max(files, key=os.path.getmtime)
-    logger.info(f"读取: {os.path.basename(latest)}")
-    wb = openpyxl.load_workbook(latest, data_only=True)
-    ws = wb.active
-    headers = {}
-    for c in range(1, ws.max_column + 1):
-        headers[c] = str(ws.cell(1, c).value or '').strip()
-    def find_col(keywords):
-        for c, h in headers.items():
-            for kw in keywords:
-                if h == kw or kw in h:
-                    return c - 1
-        return None
-    col_map = {
-        'applyId': find_col(['申请号']),
-        'title': find_col(['发明名称', '专利名称', '名称']),
-        'pubId': find_col(['公开（公告）号', '公开公告号']),
-        'applyDate': find_col(['申请日']),
-        'pubDate': find_col(['公开（公告）日', '公开公告日']),
-        'classification': find_col(['IPC分类号', 'IPC']),
-        'applicant': find_col(['申请（专利权）人', '申请人', '专利权人']),
-        'inventor': find_col(['发明人']),
-        'patentAgency': find_col(['专利代理机构']),
-        'patentAgent': find_col(['专利代理师', '代理人']),
-        'abstract': find_col(['摘要']),
-        'address': find_col(['地址']),
-        'patentType': find_col(['文献类型', '专利类型']),
-    }
-    records = []
-    for r in range(2, ws.max_row + 1):
-        raw_id = str(ws.cell(r, (col_map['applyId'] or 0) + 1).value or '').strip()
-        aid = normalize_apply_id(raw_id)
-        if not aid:
-            continue
-        def get_cell(key):
-            idx = col_map.get(key)
-            if idx is None:
-                return ''
-            return str(ws.cell(r, idx + 1).value or '').strip()
-        records.append({
-            'applyId': aid,
-            'title': get_cell('title').replace('\n', ' '),
-            'pubId': get_cell('pubId'),
-            'applyDate': parse_apply_date(get_cell('applyDate')),
-            'pubDate': parse_apply_date(get_cell('pubDate')),
-            'classification': get_cell('classification').replace('全部', '').strip('; '),
-            'applicant': get_cell('applicant').replace('\n', ' '),
-            'inventor': clean_inventor(get_cell('inventor')),
-            'patentAgency': get_cell('patentAgency'),
-            'patentAgent': get_cell('patentAgent'),
-            'abstract': get_cell('abstract'),
-            'address': get_cell('address'),
-            'patentType': get_cell('patentType'),
-            'source': '专利检索分析网',
-        })
-    wb.close()
-    return records
 
+    all_records = []
+
+    for filepath in files:
+        logger.info(f"[专利检索分析网] 正在读取: {os.path.basename(filepath)}")
+        wb = openpyxl.load_workbook(filepath, data_only=True)
+        ws = wb.active
+
+        # 读取表头，建立列名 -> 列索引（0-based）的映射
+        headers = {}
+        for c in range(1, ws.max_column + 1):
+            header_text = str(ws.cell(1, c).value or '').strip()
+            headers[c] = header_text
+
+        def find_col(keywords):
+            """根据关键词列表查找列索引（0-based），返回 None 表示未找到"""
+            for c, h in headers.items():
+                for kw in keywords:
+                    if h == kw or kw in h:
+                        return c - 1  # 转为 0-based
+            return None
+
+        # 映射常用字段
+        col_map = {
+            'applyId': find_col(['申请号']),
+            'title': find_col(['发明名称', '专利名称', '名称']),
+            'pubId': find_col(['公开（公告）号', '公开公告号']),
+            'applyDate': find_col(['申请日']),
+            'pubDate': find_col(['公开（公告）日', '公开公告日']),
+            'classification': find_col(['IPC分类号', 'IPC']),
+            'applicant': find_col(['申请（专利权）人', '申请人', '专利权人']),
+            'inventor': find_col(['发明人']),
+            'patentAgency': find_col(['专利代理机构']),
+            'patentAgent': find_col(['专利代理师', '代理人']),
+            'abstract': find_col(['摘要']),
+            'address': find_col(['地址']),
+            'patentType': find_col(['文献类型', '专利类型']),
+        }
+
+        # 逐行读取数据（从第2行开始）
+        for r in range(2, ws.max_row + 1):
+            def get_cell(key):
+                idx = col_map.get(key)
+                if idx is None:
+                    return ''
+                val = ws.cell(r, idx + 1).value
+                return str(val).strip() if val is not None else ''
+
+            raw_id = get_cell('applyId')
+            aid = normalize_apply_id(raw_id)
+            if not aid:
+                continue  # 申请号为空则跳过
+
+            record = {
+                'applyId': aid,
+                'title': get_cell('title').replace('\n', ' '),
+                'pubId': get_cell('pubId'),
+                'applyDate': parse_apply_date(get_cell('applyDate')),
+                'pubDate': parse_apply_date(get_cell('pubDate')),
+                'classification': get_cell('classification').replace('全部', '').strip('; '),
+                'applicant': get_cell('applicant').replace('\n', ' '),
+                'inventor': clean_inventor(get_cell('inventor')),
+                'patentAgency': get_cell('patentAgency'),
+                'patentAgent': get_cell('patentAgent'),
+                'abstract': get_cell('abstract'),
+                'address': get_cell('address'),
+                'patentType': get_cell('patentType'),
+                'source': '专利检索分析网',
+            }
+            all_records.append(record)
+
+        wb.close()
+
+    logger.info(f"[专利检索分析网] 共读取 {len(all_records)} 条记录（来自 {len(files)} 个文件）")
+    return all_records
 
 # ==================== 融合逻辑 ====================
 def merge_all(search_data, tianyan_data, publish_data):
