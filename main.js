@@ -438,11 +438,17 @@ function createWindow() {
         width: 1400, height: 900,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
-            contextIsolation: true,
+            // contextIsolation: true,
             nodeIntegration: false,
         },
         title: '专利监控看板',
     });
+
+    // ⚡ 关键：允许拖放
+    mainWindow.webContents.on('will-prevent-default', (event) => {
+        event.preventDefault();
+    });
+
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
     if (!app.isPackaged) mainWindow.webContents.openDevTools();
     mainWindow.on('closed', () => { mainWindow = null; });

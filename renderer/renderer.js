@@ -686,43 +686,46 @@ function setupDragAndDrop() {
     const dropZone = document.getElementById('dropZone');
     if (!dropZone) return;
 
-    // ===== 全局阻止默认 + 设置 dropEffect（修复禁止图标） =====
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        document.body.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (eventName === 'dragover' && e.dataTransfer) {
-                e.dataTransfer.dropEffect = 'copy';
-            }
-        });
+    // ========== 1. 全局允许拖放（关键） ==========
+    const allowDrag = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'copy';
+        }
+    };
 
-        dropZone.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (eventName === 'dragover' && e.dataTransfer) {
-                e.dataTransfer.dropEffect = 'copy';
-                dropZone.classList.add('drag-over');
-            }
-            if (eventName === 'dragleave' || eventName === 'drop') {
-                dropZone.classList.remove('drag-over');
-            }
-        });
-    });
+    // 在 document 和 dropZone 上都绑定（确保无死角）
+    document.addEventListener('dragenter', allowDrag);
+    document.addEventListener('dragover', allowDrag);
+    document.addEventListener('dragleave', allowDrag);
+    document.addEventListener('drop', allowDrag);
 
-    // ===== 拖拽进入/离开窗口时显示/隐藏 drop zone =====
+    dropZone.addEventListener('dragenter', allowDrag);
+    dropZone.addEventListener('dragover', allowDrag);
+    dropZone.addEventListener('dragleave', allowDrag);
+    dropZone.addEventListener('drop', allowDrag);
+
+    // ========== 2. 高亮效果 ==========
+    dropZone.addEventListener('dragover', () => dropZone.classList.add('drag-over'));
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+
+    // ========== 3. 拖入/拖出窗口时显示/隐藏 drop zone ==========
     let dragCounter = 0;
 
-    document.body.addEventListener('dragenter', () => {
+    document.body.addEventListener('dragenter', (e) => {
         dragCounter++;
         if (dragCounter === 1) dropZone.classList.add('visible');
     });
 
-    document.body.addEventListener('dragleave', () => {
+    document.body.addEventListener('dragleave', (e) => {
         dragCounter--;
-        if (dragCounter === 0) dropZone.classList.remove('visible', 'drag-over');
+        if (dragCounter === 0) {
+            dropZone.classList.remove('visible', 'drag-over');
+        }
     });
 
-    // ===== 放置文件处理 =====
+    // ========== 4. 处理文件放置 ==========
     dropZone.addEventListener('drop', async (e) => {
         dragCounter = 0;
         dropZone.classList.remove('visible', 'drag-over');
@@ -730,7 +733,11 @@ function setupDragAndDrop() {
         const files = [...e.dataTransfer.files];
         if (files.length === 0) return;
 
-        const filePaths = files.map(f => window.electronAPI.getFilePath(f)).filter(Boolean);
+        const filePaths = files.map(f => {
+            try { return window.electronAPI.getFilePath(f); }
+            catch { return null; }
+        }).filter(Boolean);
+
         if (filePaths.length === 0) {
             addMessage('无法获取文件路径，导入失败', 'error');
             return;
@@ -752,11 +759,13 @@ function setupDragAndDrop() {
         }
     });
 
-    // ===== 启动提示动画：0.5秒后显示，2秒后消失 =====
+    // ========== 5. 启动提示动画 ==========
     setTimeout(() => {
         dropZone.classList.add('visible');
         setTimeout(() => dropZone.classList.remove('visible'), 2000);
     }, 500);
+
+    console.log('拖拽功能已初始化'); // 调试用，可删除
 }
 
 // 简单的目标文件夹选择弹窗
