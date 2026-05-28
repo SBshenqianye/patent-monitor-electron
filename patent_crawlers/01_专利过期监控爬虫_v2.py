@@ -13,7 +13,7 @@
 
 import csv
 import logging
-import sys
+import sys, os
 import time
 import random
 from datetime import datetime
