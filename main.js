@@ -438,15 +438,36 @@ function createWindow() {
         width: 1400, height: 900,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
-            // contextIsolation: true,
+            contextIsolation: true,
             nodeIntegration: false,
+            // 确保拖放功能开启（可选，默认开启）
+            disableHtml5DragAndDrop: false,
         },
+        // 使用标准窗口边框（支持拖放事件）
+        frame: true,
+        titleBarStyle: 'default',
         title: '专利监控看板',
     });
 
-    // ⚡ 关键：允许拖放
+    // ===== 拖放事件处理（顺序无关，但建议放在 loadFile 前） =====
+
+    // 阻止拖放文件时窗口跳转到该文件
+    mainWindow.webContents.on('will-navigate', (event, url) => {
+        event.preventDefault();
+    });
+
+    // 允许 HTML5 拖放（阻止浏览器默认行为）
     mainWindow.webContents.on('will-prevent-default', (event) => {
         event.preventDefault();
+    });
+
+    // 获取拖入的文件路径（核心事件）
+    mainWindow.on('drop-file', (event, filePaths) => {
+        event.preventDefault();
+        console.log('[主进程 drop-file] 检测到文件拖放，路径：', filePaths);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('dropped-files', filePaths);
+        }
     });
 
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));

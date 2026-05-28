@@ -686,62 +686,72 @@ function setupDragAndDrop() {
     const dropZone = document.getElementById('dropZone');
     if (!dropZone) return;
 
-    // ========== 1. 全局允许拖放（关键） ==========
-    const allowDrag = (e) => {
+    // ===== 1. 全局阻止默认，区域外禁止放置 =====
+    document.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (e.dataTransfer) {
-            e.dataTransfer.dropEffect = 'copy';
-        }
-    };
-
-    // 在 document 和 dropZone 上都绑定（确保无死角）
-    document.addEventListener('dragenter', allowDrag);
-    document.addEventListener('dragover', allowDrag);
-    document.addEventListener('dragleave', allowDrag);
-    document.addEventListener('drop', allowDrag);
-
-    dropZone.addEventListener('dragenter', allowDrag);
-    dropZone.addEventListener('dragover', allowDrag);
-    dropZone.addEventListener('dragleave', allowDrag);
-    dropZone.addEventListener('drop', allowDrag);
-
-    // ========== 2. 高亮效果 ==========
-    dropZone.addEventListener('dragover', () => dropZone.classList.add('drag-over'));
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-
-    // ========== 3. 拖入/拖出窗口时显示/隐藏 drop zone ==========
-    let dragCounter = 0;
-
-    document.body.addEventListener('dragenter', (e) => {
-        dragCounter++;
-        if (dragCounter === 1) dropZone.classList.add('visible');
+        e.dataTransfer.dropEffect = 'none';   // 区域外禁止
+    });
+    document.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    });
+    document.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    });
+    document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove('visible');
     });
 
+    // ===== 2. 进入/离开窗口控制区域显示 =====
+    document.body.addEventListener('dragenter', () => {
+        dropZone.classList.add('visible');
+    });
     document.body.addEventListener('dragleave', (e) => {
-        dragCounter--;
-        if (dragCounter === 0) {
-            dropZone.classList.remove('visible', 'drag-over');
+        // 只有真正离开窗口才隐藏（避免子元素干扰）
+        if (!e.relatedTarget || e.relatedTarget === document.documentElement) {
+            dropZone.classList.remove('visible');
+            dropZone.classList.remove('drag-over');
         }
     });
+    document.body.addEventListener('drop', () => {
+        dropZone.classList.remove('visible');
+    });
 
-    // ========== 4. 处理文件放置 ==========
-    dropZone.addEventListener('drop', async (e) => {
-        dragCounter = 0;
-        dropZone.classList.remove('visible', 'drag-over');
+    // ===== 3. 区域内事件（禁止子元素触发，消除闪烁） =====
+    // 在 dropZone 上设置 pointer-events 样式：让子元素不响应拖放事件
+    dropZone.style.pointerEvents = 'auto';
+    // 给所有子元素设置 pointer-events: none，使事件直接冒泡到 dropZone
+    const children = dropZone.querySelectorAll('*');
+    children.forEach(child => child.style.pointerEvents = 'none');
 
-        const files = [...e.dataTransfer.files];
-        if (files.length === 0) return;
+    // 高亮只在 dragover 时添加
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
+        dropZone.classList.add('drag-over');
+    });
 
-        const filePaths = files.map(f => {
-            try { return window.electronAPI.getFilePath(f); }
-            catch { return null; }
-        }).filter(Boolean);
+    // 离开区域时移除高亮（不依赖 relatedTarget 的子元素判断，因为子元素事件已屏蔽）
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('drag-over');
+    });
 
-        if (filePaths.length === 0) {
-            addMessage('无法获取文件路径，导入失败', 'error');
-            return;
-        }
+    // 区域内 drop：只隐藏区域，不处理文件
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove('drag-over', 'visible');
+    });
+
+    // ===== 4. 接收主进程发来的文件路径，执行导入 =====
+    window.electronAPI.onDroppedFiles(async (filePaths) => {
+        console.log('[渲染] 收到文件路径:', filePaths);
+        if (!filePaths || filePaths.length === 0) return;
 
         const target = await askTargetFolder();
         if (!target) return;
@@ -759,16 +769,13 @@ function setupDragAndDrop() {
         }
     });
 
-    // ========== 5. 启动提示动画 ==========
+    // ===== 5. 启动提示 =====
     setTimeout(() => {
         dropZone.classList.add('visible');
         setTimeout(() => dropZone.classList.remove('visible'), 2000);
     }, 500);
-
-    console.log('拖拽功能已初始化'); // 调试用，可删除
 }
 
-// 简单的目标文件夹选择弹窗
 async function askTargetFolder() {
     const choice = prompt(
         '请选择导入目标文件夹（输入数字）：\n1. 中国专利公布公告网\n2. 天眼查\n3. 专利检索及分析网',

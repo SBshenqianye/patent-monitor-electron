@@ -25,7 +25,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getTutorialIgnore: () => ipcRenderer.invoke('get-tutorial-ignore'),
     setTutorialIgnore: (ignore) => ipcRenderer.invoke('set-tutorial-ignore', ignore),
 
-    // 拖拽导入（新增）
-    getFilePath: (file) => webUtils.getPathForFile(file),
+
+    // 拖拽导入（只保留这两个）
+    onDroppedFiles: (callback) => ipcRenderer.on('dropped-files', (event, filePaths) => callback(filePaths)),
     importFiles: (filePaths, targetFolder) => ipcRenderer.invoke('import-files', filePaths, targetFolder),
 });
