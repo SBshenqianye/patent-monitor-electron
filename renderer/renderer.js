@@ -644,6 +644,7 @@ function setupEventListeners() {
 // ======================== 初始化 ========================
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('clearAllMessagesBtn').addEventListener('click', clearAllMessages);
+    setupDragAndDrop();
     setupEventListeners();
     bindManualImportModalEvents();
     bindTutorialModalEvents();  // 绑定教程弹窗事件
@@ -680,6 +681,98 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentTab === 'chart') renderCharts();
     }, 10000);
 });
+
+function setupDragAndDrop() {
+    const dropZone = document.getElementById('dropZone');
+    if (!dropZone) return;
+
+    // ===== 全局阻止默认 + 设置 dropEffect（修复禁止图标） =====
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        document.body.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (eventName === 'dragover' && e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'copy';
+            }
+        });
+
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (eventName === 'dragover' && e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'copy';
+                dropZone.classList.add('drag-over');
+            }
+            if (eventName === 'dragleave' || eventName === 'drop') {
+                dropZone.classList.remove('drag-over');
+            }
+        });
+    });
+
+    // ===== 拖拽进入/离开窗口时显示/隐藏 drop zone =====
+    let dragCounter = 0;
+
+    document.body.addEventListener('dragenter', () => {
+        dragCounter++;
+        if (dragCounter === 1) dropZone.classList.add('visible');
+    });
+
+    document.body.addEventListener('dragleave', () => {
+        dragCounter--;
+        if (dragCounter === 0) dropZone.classList.remove('visible', 'drag-over');
+    });
+
+    // ===== 放置文件处理 =====
+    dropZone.addEventListener('drop', async (e) => {
+        dragCounter = 0;
+        dropZone.classList.remove('visible', 'drag-over');
+
+        const files = [...e.dataTransfer.files];
+        if (files.length === 0) return;
+
+        const filePaths = files.map(f => window.electronAPI.getFilePath(f)).filter(Boolean);
+        if (filePaths.length === 0) {
+            addMessage('无法获取文件路径，导入失败', 'error');
+            return;
+        }
+
+        const target = await askTargetFolder();
+        if (!target) return;
+
+        addMessage(`正在导入 ${filePaths.length} 个文件到“${target}”...`, 'info');
+        try {
+            const result = await window.electronAPI.importFiles(filePaths, target);
+            if (result.success) {
+                addMessage(`导入成功！共复制 ${result.count} 个文件。建议运行「一键清洗」更新数据`, 'success', 0);
+            } else {
+                addMessage(`导入失败: ${result.error}`, 'error', 0);
+            }
+        } catch (err) {
+            addMessage(`导入异常: ${err.message}`, 'error');
+        }
+    });
+
+    // ===== 启动提示动画：0.5秒后显示，2秒后消失 =====
+    setTimeout(() => {
+        dropZone.classList.add('visible');
+        setTimeout(() => dropZone.classList.remove('visible'), 2000);
+    }, 500);
+}
+
+// 简单的目标文件夹选择弹窗
+async function askTargetFolder() {
+    const choice = prompt(
+        '请选择导入目标文件夹（输入数字）：\n1. 中国专利公布公告网\n2. 天眼查\n3. 专利检索及分析网',
+        '1'
+    );
+    const map = {
+        '1': '中国专利公布公告网',
+        '2': '天眼查',
+        '3': '专利检索及分析网',
+    };
+    return map[choice] || null;
+}
+
 
 // ======================== 使用教程弹窗 ========================
 async function showTutorialDialog() {

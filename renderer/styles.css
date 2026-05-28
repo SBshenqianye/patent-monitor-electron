@@ -867,3 +867,42 @@ tbody tr.urgent-row {
 #treeContainer .tree-children {
     margin-left: 24px;
 }
+
+.drop-zone {
+    border: 2px dashed #ccc;
+    border-radius: 12px;
+    text-align: center;
+    margin: 0 0 16px 0;
+    transition: all 0.3s ease;
+    background: #fafafa;
+    cursor: default;
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    padding: 0 28px;
+    border-width: 0;
+}
+
+.drop-zone.visible {
+    max-height: 200px;
+    opacity: 1;
+    padding: 28px;
+    border-width: 2px;
+}
+
+.drop-zone.drag-over {
+    border-color: #1a73e8;
+    background: #e8f0fe;
+}
+.drop-zone-content .drop-icon {
+  font-size: 36px;
+  display: block;
+  margin-bottom: 8px;
+}
+.drop-zone-content p {
+  margin: 4px 0;
+  font-weight: 500;
+}
+.drop-zone-content small {
+  color: #999;
+}

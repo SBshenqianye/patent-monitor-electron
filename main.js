@@ -304,6 +304,28 @@ function writeUserConfig(config) {
 
 // ========== IPC 处理 ==========
 function setupIPC() {
+    // 拖拽导入文件
+    ipcMain.handle('import-files', async (event, filePaths, targetFolder) => {
+        const validFolders = ['中国专利公布公告网', '天眼查', '专利检索及分析网'];
+        if (!validFolders.includes(targetFolder)) {
+            return { success: false, error: '无效的目标文件夹' };
+        }
+        const destDir = path.join(tempDataDir, targetFolder);
+        fs.mkdirSync(destDir, { recursive: true });
+
+        let count = 0;
+        for (const src of filePaths) {
+            try {
+                const filename = path.basename(src);
+                fs.copyFileSync(src, path.join(destDir, filename));
+                count++;
+            } catch (err) {
+                // 可记录日志，此处忽略单文件失败继续复制
+            }
+        }
+        if (count === 0) return { success: false, error: '没有文件被成功复制' };
+        return { success: true, count };
+    });
     ipcMain.handle('get-data', () => {
         const data = readCleanedJson();
         return { success: true, data: data || { patents: [] } };

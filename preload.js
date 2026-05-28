@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
     getData: () => ipcRenderer.invoke('get-data'),
@@ -24,4 +24,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 使用教程弹窗
     getTutorialIgnore: () => ipcRenderer.invoke('get-tutorial-ignore'),
     setTutorialIgnore: (ignore) => ipcRenderer.invoke('set-tutorial-ignore', ignore),
+
+    // 拖拽导入（新增）
+    getFilePath: (file) => webUtils.getPathForFile(file),
+    importFiles: (filePaths, targetFolder) => ipcRenderer.invoke('import-files', filePaths, targetFolder),
 });
