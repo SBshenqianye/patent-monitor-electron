@@ -359,7 +359,9 @@ def main():
                     logger.error("连续 502，跳过该关键词")
                     continue
 
-                page.reload(wait_until="networkidle")
+                # 使用 goto 替代 reload，避免 ERR_ABORTED
+                current_url = page.url
+                page.goto(current_url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(random.randint(2000, 4000))
 
                 trigger_search(page, keyword)
