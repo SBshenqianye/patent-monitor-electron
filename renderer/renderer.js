@@ -682,37 +682,60 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 10000);
 });
 
-/**
- * 根据文件路径数组自动判断目标文件夹
- * @param {string[]} filePaths
- * @returns {string|null} 目标文件夹名，或 null 表示无法识别
- */
+// ========== 辅助：自动判定目标文件夹 ==========
 function determineTargetFolder(filePaths) {
-    const hasCSV = filePaths.some(p => p.endsWith('.csv'));
-    const hasXLSX = filePaths.some(p => p.endsWith('.xlsx'));
+    const hasCSV = filePaths.some(p => p.toLowerCase().endsWith('.csv'));
+    const hasXLSX = filePaths.some(p => p.toLowerCase().endsWith('.xlsx'));
 
-    // 纯 CSV 文件 → 中国专利公布公告网
     if (hasCSV && !hasXLSX) return '中国专利公布公告网';
-
-    // 纯 XLSX 文件 → 根据文件名进一步判断
     if (!hasCSV && hasXLSX) {
         const tianyan = filePaths.some(p => p.includes('天眼查'));
         return tianyan ? '天眼查' : '专利检索及分析网';
     }
-
-    // 混合文件，默认放中国专利公布公告网（可根据需要调整）
     if (hasCSV && hasXLSX) return '中国专利公布公告网';
-
-    // 无法识别
     return null;
 }
 
+// ========== 辅助：显示目标文件夹选择弹窗 ==========
+function showDropTargetDialog() {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('dropTargetModal');
+        if (!modal) {
+            resolve(null);
+            return;
+        }
+
+        const buttons = modal.querySelectorAll('[data-target]');
+        const cancelBtn = document.getElementById('cancelDropTargetBtn');
+
+        const close = (target) => {
+            modal.classList.remove('show');
+            document.body.style.overflow = '';
+            buttons.forEach(btn => btn.removeEventListener('click', handler));
+            cancelBtn.removeEventListener('click', cancelHandler);
+            resolve(target);
+        };
+
+        const handler = (e) => {
+            const target = e.currentTarget.getAttribute('data-target');
+            close(target);
+        };
+        const cancelHandler = () => close(null);
+
+        buttons.forEach(btn => btn.addEventListener('click', handler));
+        cancelBtn.addEventListener('click', cancelHandler);
+
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden';
+    });
+}
+
+// ========== 主函数：设置拖拽 ==========
 function setupDragAndDrop() {
     const dropZone = document.getElementById('dropZone');
     if (!dropZone) return;
-    console.log('[渲染] 拖拽区域已初始化');
 
-    // ===== 1. 全局允许拖放，区域外禁止放置 =====
+    // 1. 全局事件：区域外禁止放置
     document.addEventListener('dragenter', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -720,8 +743,7 @@ function setupDragAndDrop() {
     document.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        // 区域外设为 none，显示禁止图标
-        e.dataTransfer.dropEffect = 'none';
+        e.dataTransfer.dropEffect = 'none';   // 区域外禁止图标
     });
     document.addEventListener('dragleave', (e) => {
         e.preventDefault();
@@ -733,29 +755,25 @@ function setupDragAndDrop() {
         dropZone.classList.remove('visible', 'drag-over');
     });
 
-    // ===== 2. 窗口进入/离开显示拖拽区域 =====
+    // 2. 显示 / 隐藏拖拽区域
     document.body.addEventListener('dragenter', () => {
         dropZone.classList.add('visible');
-        console.log('[渲染] 显示拖拽区域');
     });
     document.body.addEventListener('dragleave', (e) => {
         if (!e.relatedTarget || e.relatedTarget === document.documentElement) {
             dropZone.classList.remove('visible', 'drag-over');
-            console.log('[渲染] 隐藏拖拽区域');
         }
     });
     document.body.addEventListener('drop', () => {
         dropZone.classList.remove('visible');
     });
 
-    // ===== 3. 区域内高亮 =====
-    dropZone.addEventListener('dragenter', () => {
-        dropZone.classList.add('drag-over');
-    });
+    // 3. 区域内高亮
+    dropZone.addEventListener('dragenter', () => dropZone.classList.add('drag-over'));
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        e.dataTransfer.dropEffect = 'copy'; // 区域内允许复制
+        e.dataTransfer.dropEffect = 'copy';   // 区域内允许复制
         dropZone.classList.add('drag-over');
     });
     dropZone.addEventListener('dragleave', (e) => {
@@ -764,67 +782,64 @@ function setupDragAndDrop() {
         }
     });
 
-    // ===== 4. 区域内放置：使用 File.path 获取真实路径（Electron 特有属性） =====
+    // 4. 区域内 drop 事件：获取文件路径并导入（自动识别 + 手动选择）
     dropZone.addEventListener('drop', async (e) => {
         e.preventDefault();
         e.stopPropagation();
         dropZone.classList.remove('drag-over', 'visible');
-        console.log('[渲染 drop] 开始处理文件放置');
 
         const files = [...e.dataTransfer.files];
-        console.log('[渲染 drop] 文件对象列表：', files);
         if (files.length === 0) return;
 
-        // Electron 中每个 File 对象有一个 .path 属性，返回完整路径
         const filePaths = files.map(f => f.path).filter(Boolean);
-        console.log('[渲染 drop] 通过 File.path 获取的路径：', filePaths);
+        console.log('[drop] 文件路径：', filePaths);
 
         if (filePaths.length === 0) {
-            console.warn('[渲染 drop] 未获取到任何文件路径');
-            addMessage('无法获取文件路径，请使用“手动导入”按钮', 'warning');
+            addMessage('无法获取文件路径，请使用手动导入', 'warning');
             return;
         }
 
-        const target = determineTargetFolder(filePaths);
-        console.log('[渲染] 自动判定目标文件夹：', target);
+        let target = determineTargetFolder(filePaths);
         if (!target) {
-            addMessage('无法自动识别文件类型，导入失败', 'error');
-            return;
+            target = await showDropTargetDialog();
+            if (!target) {
+                addMessage('取消导入', 'info');
+                return;
+            }
         }
 
         addMessage(`正在导入 ${filePaths.length} 个文件到“${target}”...`, 'info');
         try {
             const result = await window.electronAPI.importFiles(filePaths, target);
-            console.log('[渲染] 导入结果：', result);
             if (result.success) {
                 addMessage(`导入成功！建议运行「一键清洗」`, 'success', 0);
             } else {
                 addMessage(`导入失败: ${result.error}`, 'error', 0);
             }
         } catch (err) {
-            console.error('[渲染] 导入异常：', err);
             addMessage(`导入异常: ${err.message}`, 'error');
         }
     });
 
-    // ===== 5. 备用方案（主进程 drop-file 路径，作为打包后补充） =====
+    // 5. 备用：主进程 drop-file 发来的路径（同样支持自动+手动）
     window.electronAPI.onDroppedFiles(async (filePaths) => {
-        console.log('[渲染 IPC] 收到主进程 dropped-files:', filePaths);
+        console.log('[IPC] 收到文件路径：', filePaths);
         if (!filePaths || filePaths.length === 0) return;
 
-        // 主进程路径直接使用，无需判断区域（因为主进程只在区域放置时触发）
-        const target = determineTargetFolder(filePaths);
-        console.log('[渲染] 自动判定目标文件夹：', target);
+        let target = determineTargetFolder(filePaths);
         if (!target) {
-            addMessage('无法自动识别文件类型，导入失败', 'error');
-            return;
+            target = await showDropTargetDialog();
+            if (!target) {
+                addMessage('取消导入', 'info');
+                return;
+            }
         }
 
-        addMessage(`正在导入 ${filePaths.length} 个文件...`, 'info');
+        addMessage(`正在导入 ${filePaths.length} 个文件到“${target}”...`, 'info');
         try {
             const result = await window.electronAPI.importFiles(filePaths, target);
             if (result.success) {
-                addMessage(`导入成功！建议清洗`, 'success', 0);
+                addMessage(`导入成功！建议运行「一键清洗」`, 'success', 0);
             } else {
                 addMessage(`导入失败: ${result.error}`, 'error', 0);
             }
@@ -833,7 +848,7 @@ function setupDragAndDrop() {
         }
     });
 
-    // ===== 6. 启动提示 =====
+    // 6. 启动提示动画
     setTimeout(() => {
         dropZone.classList.add('visible');
         setTimeout(() => dropZone.classList.remove('visible'), 2000);
