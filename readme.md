@@ -15,8 +15,9 @@ cd patent-monitor-electron
 # 打包清洗脚本
 python -m PyInstaller --onefile --distpath extraResources "patent_crawlers\00_数据清洗融合.py"
 # 打包爬虫 A
-python -m PyInstaller --onefile --distpath extraResources "patent_crawlers\01_专利过期监控爬虫_v2.py"
+<!-- python -m PyInstaller --onefile --distpath extraResources "patent_crawlers\01_专利过期监控爬虫_v2.py" -->
+python -m PyInstaller --onefile --distpath extraResources --add-data "C:\Users\shenq\AppData\Local\ms-playwright\chromium-1223;playwright/browsers/chromium-1223" "patent_crawlers\01_专利过期监控爬虫_v2.py"
 # 打包爬虫 B
-python -m PyInstaller --onefile --distpath extraResources "patent_crawlers\02_天眼查专利导出.py"
-# 打包爬虫 C
-python -m PyInstaller --onefile --distpath extraResources "patent_crawlers\03_CNIPA专利导出.py"
+<!-- python -m PyInstaller --onefile --distpath extraResources "patent_crawlers\02_天眼查专利导出.py" -->
+python -m PyInstaller --onefile --distpath extraResources --add-data "C:\Users\shenq\AppData\Local\ms-playwright\chromium-1223;playwright/browsers/chromium-1223" "patent_crawlers\02_天眼查专利导出.py"
+
