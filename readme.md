@@ -23,4 +23,5 @@ python -m PyInstaller --onefile --distpath extraResources --add-data "C:\Users\s
 
 # 移除 --add-data 参数(不内置浏览器，减少空间)
 python -m PyInstaller --onefile --distpath extraResources patent_crawlers\01_专利过期监控爬虫_v2.py
+
 python -m PyInstaller --onefile --distpath extraResources patent_crawlers\02_天眼查专利导出.py
