@@ -14,22 +14,6 @@ try:
 except ImportError:
     TargetClosedError = None
 
-# ============================ 打包环境 Playwright 路径修复 ============================
-def fix_playwright_path():
-    """修复 PyInstaller 打包后找不到浏览器的问题"""
-    if getattr(sys, 'frozen', False):
-        # 运行在打包后的 exe 中
-        base_path = sys._MEIPASS
-        # 假设打包时浏览器放在 playwright/browsers/ 下
-        browsers_path = os.path.join(base_path, 'playwright', 'browsers')
-        if os.path.exists(browsers_path):
-            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = browsers_path
-            logging.info(f"[Playwright] 使用内置浏览器: {browsers_path}")
-        else:
-            logging.warning("[Playwright] 未找到内置浏览器，将尝试使用系统缓存")
-
-
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
@@ -37,6 +21,29 @@ TIANYAN_URL = "https://www.tianyancha.com"
 PATENT_URL = "https://www.tianyancha.com/company/2434381675/zhishi"
 DOWNLOAD_TIMEOUT = 30_000  # 点击导出后等待下载 30 秒
 LOGIN_TIMEOUT = 600        # 登录等待 10 分钟
+
+
+# ============================ 浏览器启动（使用系统 Chrome/Edge） ============================
+def launch_browser_persistent(pw, user_data_dir, headless=False, start_maximized=False, locale='zh-CN', accept_downloads=True):
+    """优先使用系统 Chrome/Edge 的持久化上下文，失败则报错退出"""
+    channels = ["chrome", "msedge"]
+    for channel in channels:
+        try:
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                channel=channel,
+                headless=headless,
+                no_viewport=True,
+                args=['--start-maximized'] if start_maximized else [],
+                locale=locale,
+                accept_downloads=accept_downloads,
+            )
+            logger.info(f"成功使用系统浏览器: {channel}")
+            return context
+        except Exception as e:
+            logger.warning(f"使用 {channel} 失败: {e}")
+    raise RuntimeError("未找到可用的 Chrome 或 Edge 浏览器，请安装后重试。")
+
 
 def setup_file_logging(data_dir):
     log_dir = Path(data_dir) / "log" / "天眼查"
@@ -46,6 +53,7 @@ def setup_file_logging(data_dir):
     fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     logging.getLogger().addHandler(fh)
     logger.info(f"日志文件: {log_file}")
+
 
 def check_login(page):
     """检测天眼查登录状态：优先判断登录/注册按钮是否存在且可见"""
@@ -83,6 +91,7 @@ def check_login(page):
         logger.warning(f"[登录检查] 异常: {e}")
         return False
 
+
 def wait_for_login(page, timeout=LOGIN_TIMEOUT):
     """等待用户完成登录：轮询检测登录后特有的用户菜单元素出现且有内容"""
     logger.info("[登录] 请在弹出的浏览器中扫码或输入账号密码登录...")
@@ -118,6 +127,7 @@ def wait_for_login(page, timeout=LOGIN_TIMEOUT):
     logger.warning("[登录] 等待超时")
     return False
 
+
 def export_and_download(page, output_dir):
     """点击导出按钮，监听下载并保存文件"""
     logger.info("[导出] 等待导出按钮...")
@@ -140,6 +150,7 @@ def export_and_download(page, output_dir):
     except PlaywrightTimeout:
         logger.error("[下载] 未检测到下载事件")
         return False, None
+
 
 def do_crawl(page, output_dir):
     try:
@@ -168,8 +179,8 @@ def do_crawl(page, output_dir):
             return False, None
     return success, file
 
+
 def main():
-    fix_playwright_path()   # <--- 添加这行
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir', required=True)
     parser.add_argument('--action', required=True, choices=['check', 'crawl'])
@@ -184,12 +195,13 @@ def main():
 
     if args.action == 'check':
         with sync_playwright() as p:
-            startup_arg = '--start-minimized' if args.start_minimized else '--start-maximized'
-            browser = p.chromium.launch_persistent_context(
-                user_data_dir=str(USER_DATA_DIR), 
-                headless=False, 
-                no_viewport=True,
-                args=[startup_arg],
+            browser = launch_browser_persistent(
+                p,
+                user_data_dir=str(USER_DATA_DIR),
+                headless=False,
+                start_maximized=not args.start_minimized,  # 如果 --start-minimized 则非最大化
+                locale='zh-CN',
+                accept_downloads=True,
             )
             page = browser.pages[0] if browser.pages else browser.new_page()
             logged_in = check_login(page)
@@ -200,11 +212,11 @@ def main():
     # crawl 动作
     logger.info("[启动] 正在打开天眼查浏览器...")
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
+        browser = launch_browser_persistent(
+            p,
             user_data_dir=str(USER_DATA_DIR),
             headless=False,
-            no_viewport=True,
-            args=['--start-maximized'],
+            start_maximized=True,
             locale='zh-CN',
             accept_downloads=True,
         )
@@ -220,6 +232,7 @@ def main():
         logger.info("[结束] 操作完成，5秒后关闭浏览器...")
         time.sleep(5)
         browser.close()
+
 
 if __name__ == "__main__":
     main()
