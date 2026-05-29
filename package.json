@@ -41,18 +41,17 @@
       {
         "from": "extraResources",
         "to": "extraResources",
-        "filter": ["**/*.exe"]
+        "filter": ["**/*"]
       }
     ],
     "win": {
-      "target": ["nsis"],
+      "target": ["portable"],
       "icon": null,
-      "artifactName": "${productName}-${version}-setup.${ext}"
+      "artifactName": "${productName}-便携版.${ext}"
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+    "portable": {
+      "artifactName": "${productName}-便携版.exe",
+      "requestExecutionLevel": "user"
     }
   },
   "dependencies": {
