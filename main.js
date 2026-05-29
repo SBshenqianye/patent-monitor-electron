@@ -156,7 +156,23 @@ function hasNewFilesInDataDir(startTime) {
     return scan(dataDir);
 }
 
-// ========== 单个爬虫 ==========
+// 辅助函数：快速检测脚本是否需要登录（仅用于需要登录的爬虫）
+async function checkLoginStatus(scriptPath) {
+    try {
+        const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'check']);
+        const lines = result.stdout.trim().split('\n');
+        const lastLine = lines[lines.length - 1].trim();
+        if (lastLine.startsWith('{')) {
+            const data = JSON.parse(lastLine);
+            return data.loggedIn === true;
+        }
+    } catch (err) {
+        console.warn('登录状态检测失败:', err);
+    }
+    return false;  // 保守认为未登录
+}
+
+// ========== 单个爬虫（最终版） ==========
 async function runCrawler(name, scriptName, requiresLogin) {
     const scriptPath = getScriptPath(scriptName);
     if (!fs.existsSync(scriptPath)) {
@@ -164,64 +180,122 @@ async function runCrawler(name, scriptName, requiresLogin) {
         return { success: false, error: `脚本不存在: ${scriptPath}` };
     }
 
-    // 读取用户设置
     const config = readUserConfig();
     let useHeadless = config.headless !== false;
+    let lastError = null;
+    const maxAttempts = 4;
 
-    // 如果需要登录且当前设置为无头，则强制改为有头，并提醒用户
-    if (requiresLogin && useHeadless) {
-        useHeadless = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let startMinimized = false;
+        let needLoginQueue = false;
+
+        // ===== 决定是否最小化和是否需要排队登录 =====
+        if (useHeadless) {
+            // 无头模式：不显示窗口，无需最小化，也不排队
+            startMinimized = false;
+            needLoginQueue = false;
+        } else {
+            // 有头模式
+            if (!requiresLogin) {
+                // 无需登录的爬虫 → 总是最小化
+                startMinimized = true;
+                needLoginQueue = false;
+            } else {
+                // 需要登录的爬虫 → 先检测登录状态
+                const loggedIn = await checkLoginStatus(scriptPath);
+                if (loggedIn) {
+                    startMinimized = true;   // 已登录 → 最小化窗口直接爬
+                    needLoginQueue = false;
+                    sendToRenderer('crawler-status', {
+                        name,
+                        status: 'info',
+                        message: `${name} 已登录，将最小化运行`
+                    });
+                } else {
+                    startMinimized = false;  // 未登录 → 显示窗口供扫码
+                    needLoginQueue = true;
+                }
+            }
+        }
+
+        // ===== 排队登录（仅当需要时） =====
+        if (needLoginQueue) {
+            sendToRenderer('crawler-status', { name, status: 'waiting-login', message: `正在排队等待登录...` });
+            await acquireLoginSlot(name);
+        }
+
+        // 构建参数
+        const args = [
+            '--data-dir', dataDir,
+            '--action', 'crawl',
+            '--headless', useHeadless ? 'true' : 'false',
+        ];
+        if (!useHeadless && startMinimized) {
+            args.push('--start-minimized');
+        }
+
         sendToRenderer('crawler-status', {
             name,
-            status: 'info',
-            message: '天眼查需要登录，已自动切换为有头模式',
+            status: 'running',
+            message: `正在运行 ${name}（第 ${attempt}/${maxAttempts} 次${useHeadless ? '，无头' : '，有头'}）`
         });
-    }
 
-    const args = [
-        '--data-dir', dataDir,
-        '--action', 'crawl',
-        '--headless', useHeadless ? 'true' : 'false'
-    ];
+        const startTime = Date.now();
+        try {
+            const result = await runPythonScript(scriptPath, args);
+            const lines = result.stdout.trim().split('\n');
+            const lastLine = lines[lines.length - 1].trim();
+            let data = {};
+            if (lastLine.startsWith('{')) {
+                try { data = JSON.parse(lastLine); } catch (e) {
+                    console.error('JSON 解析失败:', lastLine);
+                }
+            }
 
-    if (requiresLogin) {
-        sendToRenderer('crawler-status', { name, status: 'waiting-login', message: `正在排队等待登录...` });
-        await acquireLoginSlot(name);
-    }
+            // 成功
+            if (data.success) {
+                if (needLoginQueue) releaseLoginSlot(name);
+                sendToRenderer('crawler-status', { name, status: 'completed', message: `${name} 完成` });
+                return { success: true, output: result.stdout };
+            }
 
-    sendToRenderer('crawler-status', { name, status: 'running', message: `正在运行 ${name}...` });
+            // 无头且需要登录 → 切换有头重试
+            if (data.requireLogin && useHeadless) {
+                console.log(`[runCrawler] ${name} 无头需要登录，切换有头`);
+                useHeadless = false;
+                if (needLoginQueue) releaseLoginSlot(name);  // 安全释放
+                continue;
+            }
 
-    const startTime = Date.now();
-    try {
-        // 注意：这里使用上面构建好的 args，而不是硬编码 ['--data-dir', dataDir, '--action', 'crawl']
-        const result = await runPythonScript(scriptPath, args);
-        const lines = result.stdout.trim().split('\n');
-        const lastLine = lines[lines.length - 1].trim();
-        let scriptSuccess = false;
-        if (lastLine.startsWith('{')) {
-            try {
-                const data = JSON.parse(lastLine);
-                scriptSuccess = data.success === true;
-            } catch {}
+            // 其他失败
+            throw new Error(data.error || '爬虫返回失败');
+
+        } catch (err) {
+            if (needLoginQueue) releaseLoginSlot(name);
+            lastError = err;
+
+            // 无头模式失败且还有重试次数，切有头重试
+            if (useHeadless && attempt < maxAttempts) {
+                console.log(`[runCrawler] ${name} 无头失败，切换有头重试`);
+                useHeadless = false;
+                continue;
+            }
+            break;
+        } finally {
+            // 确保登录槽释放（有头但未排队的情况下不需要释放，但 releaseLoginSlot 可重复调用安全）
+            if (needLoginQueue) releaseLoginSlot(name);
         }
-        if (!scriptSuccess && !hasNewFilesInDataDir(startTime)) {
-            throw new Error('爬虫运行完成但未生成任何输出文件');
-        }
-        sendToRenderer('crawler-status', { name, status: 'completed', message: `${name} 完成` });
-        return { success: true, output: result.stdout };
-    } catch (err) {
-        sendToRenderer('crawler-status', {
-            name,
-            status: 'error',
-            message: `${name} 失败: ${err.message}`,
-            suggestRetry: true   // 新增：提示前端建议重试
-        });
-        return { success: false, error: err.message };
-    } finally {
-        if (requiresLogin) releaseLoginSlot(name);
     }
+
+    const finalMsg = lastError ? lastError.message : '达到最大重试次数';
+    sendToRenderer('crawler-status', {
+        name,
+        status: 'error',
+        message: `${name} 失败: ${finalMsg}${maxAttempts > 1 ? '，无头模式可能被检测，建议使用有头模式' : ''}`,
+        suggestRetry: true
+    });
+    return { success: false, error: finalMsg };
 }
-
 // ========== 一键爬取 ==========
 async function runAllCrawlers() {
     const crawlerScripts = [

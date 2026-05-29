@@ -453,8 +453,10 @@ def main():
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(all_patents)
+    # ... 原有代码，在生成 CSV 之后
     logger.info(f"CSV已保存: {csv_path}")
 
+    # 将日志输出后，再打印 JSON，确保 JSON 是最后一行
     result_info = {
         "success": True,
         "crawler": "中国专利公布公告",

@@ -24,19 +24,40 @@ LOGIN_TIMEOUT = 600        # 登录等待 10 分钟
 
 
 # ============================ 浏览器启动（使用系统 Chrome/Edge） ============================
-def launch_browser_persistent(pw, user_data_dir, headless=False, start_maximized=False, locale='zh-CN', accept_downloads=True):
-    """优先使用系统 Chrome/Edge 的持久化上下文，失败则报错退出"""
+def launch_browser_persistent(pw, user_data_dir, headless=False, start_minimized=False, locale='zh-CN', accept_downloads=True):
+    """
+    启动持久化浏览器上下文。
+    :param start_minimized: True 表示启动后最小化窗口（仅在有头模式下生效）
+    """
     channels = ["chrome", "msedge"]
     for channel in channels:
         try:
+            launch_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--no-sandbox",
+                "--disable-web-security",
+                "--disable-features=BlockInsecurePrivateNetworkRequests",
+            ]
+            if headless:
+                launch_args.append("--headless=new")
+                launch_args.append("--disable-gpu")
+            else:
+                # 有头模式下根据 start_minimized 决定窗口状态
+                if start_minimized:
+                    launch_args.append("--start-minimized")
+                else:
+                    launch_args.append("--start-maximized")
+
             context = pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 channel=channel,
                 headless=headless,
+                args=launch_args,
                 no_viewport=True,
-                args=['--start-maximized'] if start_maximized else [],
                 locale=locale,
                 accept_downloads=accept_downloads,
+                ignore_https_errors=True,
             )
             logger.info(f"成功使用系统浏览器: {channel}")
             return context
@@ -152,40 +173,55 @@ def export_and_download(page, output_dir):
         return False, None
 
 
-def do_crawl(page, output_dir):
+def do_crawl(page, output_dir, headless=False):
     try:
-        # 1. 确保已登录
         if not check_login(page):
-            logger.info("[爬取] 未登录，进入登录引导...")
-            page.goto("https://www.tianyancha.com/login", wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(3000)
-            if not wait_for_login(page):
-                return False, None
-            logger.info("[爬取] 登录成功")
+            if headless:
+                logger.warning("[无头] 检测到未登录，返回 requireLogin")
+                return False, "需要登录", None
+            else:
+                logger.info("[爬取] 未登录，进入登录引导...")
+                page.goto("https://www.tianyancha.com/login", wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(3000)
+                if not wait_for_login(page):
+                    return False, "登录超时", None
+                logger.info("[爬取] 登录成功")
 
-        # 2. 导航到专利页面
         logger.info(f"[步骤1] 访问专利页面: {PATENT_URL}")
         page.goto(PATENT_URL, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(5000)
 
-        # 3. 导出并下载
         success, file = export_and_download(page, output_dir)
+        if not success:
+            return False, "导出失败或未登录", None
+        return True, None, file
+
     except TargetClosedError:
         logger.error("浏览器被手动关闭")
-        return False, None
+        return False, "浏览器被手动关闭，爬取失败", None
     except Exception as e:
         if "Target closed" in str(e) or "Browser closed" in str(e):
             logger.error("浏览器被手动关闭")
-            return False, None
-    return success, file
-
+            return False, "浏览器被手动关闭，爬取失败", None
+        logger.error(f"爬取出错: {e}")
+        return False, str(e), None
+    
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir', required=True)
     parser.add_argument('--action', required=True, choices=['check', 'crawl'])
+    parser.add_argument('--headless', choices=['true', 'false'], default='false',
+                        help='是否无头模式')
     parser.add_argument('--start-minimized', action='store_true', help='启动时最小化浏览器窗口')
     args = parser.parse_args()
+
+    headless = args.headless.lower() == 'true'
+    if headless:
+        logger.info('[启动] 无头模式')
+    else:
+        logger.info('[启动] 有头模式')
+
     data_dir = Path(args.data_dir)
     setup_file_logging(data_dir)
     output_dir = data_dir / "temp_data" / "天眼查"
@@ -199,7 +235,7 @@ def main():
                 p,
                 user_data_dir=str(USER_DATA_DIR),
                 headless=False,
-                start_maximized=not args.start_minimized,  # 如果 --start-minimized 则非最大化
+                start_minimized=False,   # check 不需要最小化
                 locale='zh-CN',
                 accept_downloads=True,
             )
@@ -215,24 +251,41 @@ def main():
         browser = launch_browser_persistent(
             p,
             user_data_dir=str(USER_DATA_DIR),
-            headless=False,
-            start_maximized=True,
+            headless=headless,
+            start_minimized=args.start_minimized,   # 使用传入的最小化参数
             locale='zh-CN',
             accept_downloads=True,
         )
         page = browser.pages[0] if browser.pages else browser.new_page()
+
+        # 反检测脚本
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh']});
+        """)
         logger.info("[启动] 浏览器窗口已打开")
 
-        success, file_path = do_crawl(page, str(output_dir))
-        if success:
-            print(json.dumps({"success": True, "crawler": "天眼查", "file": file_path or "", "total": 0, "timestamp": datetime.now().isoformat()}, ensure_ascii=False))
-        else:
-            print(json.dumps({"success": False, "error": "导出失败或未登录"}))
-
+        success, error_msg, file_path = do_crawl(page, str(output_dir), headless=headless)
         logger.info("[结束] 操作完成，5秒后关闭浏览器...")
         time.sleep(5)
         browser.close()
 
+        if success:
+            print(json.dumps({
+                "success": True,
+                "crawler": "天眼查",
+                "file": file_path or "",
+                "total": 0,
+                "timestamp": datetime.now().isoformat()
+            }, ensure_ascii=False))
+        elif error_msg == "需要登录":
+            print(json.dumps({"success": False, "requireLogin": True, "error": "需要登录"}))
+        else:
+            print(json.dumps({"success": False, "error": error_msg}))
+
+            
 
 if __name__ == "__main__":
     main()
