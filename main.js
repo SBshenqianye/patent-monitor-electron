@@ -164,6 +164,26 @@ async function runCrawler(name, scriptName, requiresLogin) {
         return { success: false, error: `脚本不存在: ${scriptPath}` };
     }
 
+    // 读取用户设置
+    const config = readUserConfig();
+    let useHeadless = config.headless !== false;
+
+    // 如果需要登录且当前设置为无头，则强制改为有头，并提醒用户
+    if (requiresLogin && useHeadless) {
+        useHeadless = false;
+        sendToRenderer('crawler-status', {
+            name,
+            status: 'info',
+            message: '天眼查需要登录，已自动切换为有头模式',
+        });
+    }
+
+    const args = [
+        '--data-dir', dataDir,
+        '--action', 'crawl',
+        '--headless', useHeadless ? 'true' : 'false'
+    ];
+
     if (requiresLogin) {
         sendToRenderer('crawler-status', { name, status: 'waiting-login', message: `正在排队等待登录...` });
         await acquireLoginSlot(name);
@@ -173,7 +193,8 @@ async function runCrawler(name, scriptName, requiresLogin) {
 
     const startTime = Date.now();
     try {
-        const result = await runPythonScript(scriptPath, ['--data-dir', dataDir, '--action', 'crawl']);
+        // 注意：这里使用上面构建好的 args，而不是硬编码 ['--data-dir', dataDir, '--action', 'crawl']
+        const result = await runPythonScript(scriptPath, args);
         const lines = result.stdout.trim().split('\n');
         const lastLine = lines[lines.length - 1].trim();
         let scriptSuccess = false;
@@ -189,7 +210,12 @@ async function runCrawler(name, scriptName, requiresLogin) {
         sendToRenderer('crawler-status', { name, status: 'completed', message: `${name} 完成` });
         return { success: true, output: result.stdout };
     } catch (err) {
-        sendToRenderer('crawler-status', { name, status: 'error', message: `${name} 失败: ${err.message}` });
+        sendToRenderer('crawler-status', {
+            name,
+            status: 'error',
+            message: `${name} 失败: ${err.message}`,
+            suggestRetry: true   // 新增：提示前端建议重试
+        });
         return { success: false, error: err.message };
     } finally {
         if (requiresLogin) releaseLoginSlot(name);
@@ -304,6 +330,18 @@ function writeUserConfig(config) {
 
 // ========== IPC 处理 ==========
 function setupIPC() {
+    // 获取 headless 设置
+    ipcMain.handle('get-headless-mode', () => {
+        const config = readUserConfig();
+        return { headless: config.headless !== false };   // 默认 true（无头）
+    });
+    // 设置 headless 模式
+    ipcMain.handle('set-headless-mode', (event, headless) => {
+        const config = readUserConfig();
+        config.headless = headless;
+        writeUserConfig(config);
+        return { success: true };
+    });
     // 拖拽导入文件
     ipcMain.handle('import-files', async (event, filePaths, targetFolder) => {
         const validFolders = ['中国专利公布公告网', '天眼查', '专利检索及分析网'];

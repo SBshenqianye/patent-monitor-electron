@@ -608,11 +608,15 @@ function setupEventListeners() {
                 }
             } else if (status.status === 'error') {
                 const oldMsg = msgMap.get(status.name);
+                // 根据 suggestRetry 添加重试建议
+                const msg = status.suggestRetry
+                    ? `${status.name} 失败: ${status.message}，建议重新爬取`
+                    : `${status.name} 失败: ${status.message}`;
                 if (oldMsg) {
-                    await replaceMessage(oldMsg, `${status.name} 失败: ${status.message}`, 'error', 0);
+                    await replaceMessage(oldMsg, msg, 'error', 0);
                     msgMap.delete(status.name);
                 } else {
-                    addMessage(`${status.name} 失败: ${status.message}`, 'error', 0);
+                    addMessage(msg, 'error', 0);
                 }
             }
         }
@@ -660,6 +664,17 @@ document.addEventListener('DOMContentLoaded', () => {
     bindTutorialModalEvents();  // 绑定教程弹窗事件
     showTutorialDialog();       // 检查并显示教程弹窗（如果未忽略）
     loadData();
+
+    // 读取当前 headless 设置并应用到复选框
+    window.electronAPI.getHeadlessMode().then(({ headless }) => {
+        const chk = document.getElementById('headlessCheckbox');
+        if (chk) chk.checked = headless;
+    });
+
+    // 监听复选框变化，保存设置
+    document.getElementById('headlessCheckbox')?.addEventListener('change', (e) => {
+        window.electronAPI.setHeadlessMode(e.target.checked);
+    });
     
     let st;
     document.getElementById('searchInput').addEventListener('input', () => {

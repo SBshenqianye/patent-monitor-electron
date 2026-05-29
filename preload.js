@@ -29,4 +29,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 拖拽导入（这两个必须存在）
     onDroppedFiles: (callback) => ipcRenderer.on('dropped-files', (event, filePaths) => callback(filePaths)),
     importFiles: (filePaths, targetFolder) => ipcRenderer.invoke('import-files', filePaths, targetFolder),
+
+    getHeadlessMode: () => ipcRenderer.invoke('get-headless-mode'),
+    setHeadlessMode: (headless) => ipcRenderer.invoke('set-headless-mode', headless),
 });

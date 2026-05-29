@@ -906,3 +906,14 @@ tbody tr.urgent-row {
 .drop-zone-content small {
   color: #999;
 }
+
+.headless-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #555;
+    cursor: pointer;
+    margin-left: 16px;   /* 去掉 auto，改用固定值 */
+    white-space: nowrap;  /* 防止文字换行 */
+}
